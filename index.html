@@ -1,0 +1,1324 @@
+<title>matt's room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600&family=JetBrains+Mono:wght@400&family=Permanent+Marker&display=swap">
+<style>
+  /* Layout: full-bleed 3D canvas, one control bottom-right */
+  :root {
+    --bg: #e7e4df;
+    --bg-deep: #d6d2cb;
+    --fg: #3a332c;
+    --muted: #7a6f63;
+    --panel: rgba(250, 248, 244, 0.82);
+    --line: rgba(58, 51, 44, 0.14);
+    --font-ui: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-data: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #26231f; --bg-deep: #1b1916; --fg: #ece6dd; --muted: #a89c8d;
+      --panel: rgba(38, 35, 31, 0.82); --line: rgba(236, 230, 221, 0.14);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #26231f; --bg-deep: #1b1916; --fg: #ece6dd; --muted: #a89c8d;
+    --panel: rgba(38, 35, 31, 0.82); --line: rgba(236, 230, 221, 0.14);
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(ellipse at 50% 40%, var(--bg) 0%, var(--bg-deep) 100%);
+    background-color: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-ui);
+    overflow: hidden;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .controls {
+    position: fixed;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .hint { font-size: 12px; color: var(--muted); }
+  button {
+    font: 600 13px var(--font-ui);
+    color: var(--fg);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+  @media (max-width: 480px) { .hint { display: none; } }
+</style>
+
+<div id="stage"></div>
+<div class="controls">
+  <span class="hint">Drag to orbit · scroll to zoom</span>
+  <button id="reset" type="button">Reset view</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="posters/batman.js"></script>
+<script src="interactive.js"></script>
+<script>
+(() => {
+  // ---------------------------------------------------------------------------
+  // Units: 1 unit = 1 inch.
+  // Room spans x 0..W (width), z 0..D (depth), y 0..H (height).
+  // Window wall is at z = 0, closet wall at z = D (facing it), desk wall at x = 0
+  // (left of the window wall, seen from inside), bed wall at x = W.
+  // The camera starts outside the desk/closet corner; walls fade when the camera is behind them.
+  // ---------------------------------------------------------------------------
+  const W = 170, D = 120, H = 96, T = 4; // wall thickness
+
+  // Window layout on the back wall: a pair of windows sharing one opening,
+  // split by a thin mullion, centered on the wall.
+  const WIN_W = 32, WIN_H = 66, SILL_Y = 24, MULLION = 1;
+  const WIN_TOP = SILL_Y + WIN_H;
+  const OPEN_W = 2 * WIN_W + MULLION;                // 65 in total
+  const OPEN_X0 = (W - OPEN_W) / 2;                  // 42.5
+  const OPEN_X1 = OPEN_X0 + OPEN_W;                  // 107.5
+  const OPEN_CX = (OPEN_X0 + OPEN_X1) / 2;
+  const WINDOWS = [OPEN_X0 + WIN_W / 2, OPEN_X1 - WIN_W / 2]; // window center x positions
+
+  const stage = document.getElementById('stage');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  stage.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+
+  const camera = new THREE.PerspectiveCamera(32, 1, 1, 3000);
+  // Default view: looking in from outside the desk/closet corner
+  const HOME_POS = new THREE.Vector3(-91.2, 84, 233.5);
+  const HOME_TARGET = new THREE.Vector3(76.5, 26, 50.4);
+  camera.position.copy(HOME_POS);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.copy(HOME_TARGET);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 120;
+  controls.maxDistance = 700;
+  controls.maxPolarAngle = Math.PI * 0.47;
+  controls.update();
+
+  document.getElementById('reset').addEventListener('click', () => {
+    camera.position.copy(HOME_POS);
+    controls.target.copy(HOME_TARGET);
+    controls.update();
+  });
+
+  // Deterministic random so the floor looks the same on every load
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+  // Helper: add a box by its min/max corners (in inches)
+  function box(x0, y0, z0, x1, y1, z1, mat, parent = scene) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), mat);
+    m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Materials
+  // ---------------------------------------------------------------------------
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0xe2e0dc, roughness: 0.95 });
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0xf1efea, roughness: 0.6 });
+  const slabMat = new THREE.MeshStandardMaterial({ color: 0x5b4a3d, roughness: 1 });
+  const radMat  = new THREE.MeshStandardMaterial({ color: 0xf2f1ec, roughness: 0.45, metalness: 0.05 });
+  const blindMat = new THREE.MeshStandardMaterial({ color: 0xe9dfc6, roughness: 0.7 });
+  const rodMat  = new THREE.MeshStandardMaterial({ color: 0x1c1b1a, roughness: 0.45, metalness: 0.4 });
+  const glassMat = new THREE.MeshBasicMaterial({ color: 0xdfe8ee, transparent: true, opacity: 0.12, depthWrite: false });
+
+  // ---------------------------------------------------------------------------
+  // Floor: long hardwood planks running from the window wall toward the closet wall
+  // ---------------------------------------------------------------------------
+  function plankTexture(w, d) {
+    const PX = 8; // pixels per inch
+    const c = document.createElement('canvas');
+    c.width = w * PX; c.height = d * PX;
+    const g = c.getContext('2d');
+    const PLANK_W = 5;
+    for (let row = 0; row * PLANK_W < d; row++) {
+      const y = row * PLANK_W * PX;
+      let x = -rand() * 60 * PX; // staggered joints
+      while (x < c.width) {
+        const len = (40 + rand() * 44) * PX;
+        const h = 22 + rand() * 7, s = 46 + rand() * 12, l = 36 + rand() * 9;
+        g.fillStyle = `hsl(${h} ${s}% ${l}%)`;
+        g.fillRect(x, y, len, PLANK_W * PX);
+        // grain
+        for (let i = 0; i < 9; i++) {
+          g.strokeStyle = `hsla(${h - 4} ${s}% ${l - 10}% / ${0.12 + rand() * 0.18})`;
+          g.lineWidth = 0.6 + rand() * 1.2;
+          const gy = y + rand() * PLANK_W * PX;
+          g.beginPath();
+          g.moveTo(x, gy);
+          g.bezierCurveTo(x + len * 0.3, gy + (rand() - 0.5) * 8, x + len * 0.7, gy + (rand() - 0.5) * 8, x + len, gy + (rand() - 0.5) * 6);
+          g.stroke();
+        }
+        // end joint
+        g.fillStyle = 'rgba(40, 22, 10, 0.55)';
+        g.fillRect(x, y, 2, PLANK_W * PX);
+        x += len;
+      }
+      // long seam
+      g.fillStyle = 'rgba(40, 22, 10, 0.6)';
+      g.fillRect(0, y, c.width, 2);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return tex;
+  }
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(D, W),
+    new THREE.MeshStandardMaterial({ map: plankTexture(D, W), roughness: 0.55, color: 0xe8ddd2 })
+  );
+  floor.rotation.set(-Math.PI / 2, 0, Math.PI / 2);   // plank length (local x) runs along world z
+  floor.position.set(W / 2, 0, D / 2);
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // Corridor: a 37 in opening in the closet wall at the desk-wall corner,
+  // leading out past the closet wall. Only a short stub of it is modeled.
+  const CORR_W = 37, CORR_L = 48;
+  const CORR_Z1 = D + T + CORR_L; // open end of the corridor stub
+  const corrFloor = new THREE.Mesh(
+    new THREE.PlaneGeometry(CORR_Z1 - D, CORR_W),
+    new THREE.MeshStandardMaterial({ map: plankTexture(CORR_Z1 - D, CORR_W), roughness: 0.55, color: 0xe8ddd2 })
+  );
+  corrFloor.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
+  corrFloor.position.set(CORR_W / 2, 0, (D + CORR_Z1) / 2);
+  corrFloor.receiveShadow = true;
+  scene.add(corrFloor);
+
+  // Subfloor slab, visible at the cutaway edges
+  const slab = box(-T, -5, -T, W + T, -0.01, D + T, slabMat);
+  slab.castShadow = false;
+  const corrSlab = box(-T, -5, D + T, CORR_W + T, -0.01, CORR_Z1, slabMat);
+  corrSlab.castShadow = false;
+
+  // Invisible ceiling: never drawn, but blocks sunlight so it only enters through the windows
+  const shadowOnlyMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+  for (const c of [box(-T, H, -T, W + T, H + 1, D + T, shadowOnlyMat),
+                   box(-T, H, D + T, CORR_W + T, H + 1, CORR_Z1, shadowOnlyMat)]) {
+    c.receiveShadow = false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Walls. Each wall is a group so it can fade out when the camera is behind it.
+  // `outside(cam)` is true when the camera is on the far side of that wall.
+  // Everything mounted on a wall (windows, curtains, radiator) goes in its group.
+  // ---------------------------------------------------------------------------
+  const walls = {
+    window: new THREE.Group(),  // z = 0
+    desk:   new THREE.Group(),  // x = 0
+    closet: new THREE.Group(),  // z = D
+    bed:    new THREE.Group(),  // x = W
+    corridor: new THREE.Group() // walls of the corridor stub beyond the closet wall
+  };
+  const wallOutside = {
+    window: (c) => c.z < -T,
+    desk:   (c) => c.x < -T,
+    closet: (c) => c.z > D + T,
+    bed:    (c) => c.x > W + T,
+    corridor: (c) => c.z > D + T || c.x < -T
+  };
+  for (const g of Object.values(walls)) scene.add(g);
+
+  // Window wall, built around the single window opening
+  box(-T, 0, -T, OPEN_X0, H, 0, wallMat, walls.window);              // plain wall, desk side
+  box(OPEN_X0, 0, -T, OPEN_X1, SILL_Y, 0, wallMat, walls.window);    // below windows
+  box(OPEN_X0, WIN_TOP, -T, OPEN_X1, H, 0, wallMat, walls.window);   // above windows
+  box(OPEN_X1, 0, -T, W, H, 0, wallMat, walls.window);               // bed side
+  box(0, 0, 0, W, 4.5, 0.7, trimMat, walls.window);                  // baseboard
+
+  // Desk wall
+  box(-T, 0, 0, 0, H, D, wallMat, walls.desk);
+  box(0, 0, 0.7, 0.7, 4.5, D - 0.7, trimMat, walls.desk);
+
+  // Closet wall, with the corridor opening at the desk-wall end
+  // The opening runs floor to ceiling, so there is no header above it.
+  box(CORR_W, 0, D, W, H, D + T, wallMat, walls.closet);
+  // Closet: a pair of panel doors, 53.5 in total, between the corridor and the nightstand
+  const CL_W = 53.5, CL_H = 80, CL_CAS = 2.5;
+  const CL_X1 = 95, CL_X0 = CL_X1 - CL_W;                               // 41.5 .. 95
+  box(CORR_W, 0, D - 0.7, CL_X0 - CL_CAS, 4.5, D, trimMat, walls.closet); // baseboard, corridor side
+  box(CL_X1 + CL_CAS, 0, D - 0.7, W, 4.5, D, trimMat, walls.closet);      // baseboard, bed side
+  box(CL_X0 - CL_CAS, 0, D - 0.8, CL_X0, CL_H + CL_CAS, D, trimMat, walls.closet);   // casing
+  box(CL_X1, 0, D - 0.8, CL_X1 + CL_CAS, CL_H + CL_CAS, D, trimMat, walls.closet);
+  box(CL_X0 - CL_CAS, CL_H, D - 0.8, CL_X1 + CL_CAS, CL_H + CL_CAS, D, trimMat, walls.closet);
+  {
+    const knobMat = new THREE.MeshStandardMaterial({ color: 0xb8b6b0, roughness: 0.3, metalness: 0.8 });
+    const doorEdge = new THREE.MeshStandardMaterial({ color: 0x6f6b66, roughness: 0.7 });
+    const panelEdge = new THREE.MeshStandardMaterial({ color: 0xa9a59f, roughness: 0.7 });
+    const DW = CL_W / 2, ST = 3.5, zf = D - 0.4, zr = zf - 0.25;        // door face and raised frame
+    for (let i = 0; i < 2; i++) {
+      const x0 = CL_X0 + i * DW + 0.1, x1 = x0 + DW - 0.2;
+      box(x0, 0.4, zf, x1, CL_H - 0.1, D + 1, trimMat, walls.closet);   // slab, set into the jamb
+      // shaker frame: stiles, top/mid/bottom rails -> an upper and a lower panel
+      box(x0, 0.4, zr, x0 + ST, CL_H - 0.1, zf, trimMat, walls.closet);
+      box(x1 - ST, 0.4, zr, x1, CL_H - 0.1, zf, trimMat, walls.closet);
+      for (const [ya, yb] of [[0.4, 7], [34, 39], [CL_H - 4.1, CL_H - 0.1]]) {
+        box(x0 + ST, ya, zr, x1 - ST, yb, zf, trimMat, walls.closet);
+      }
+      // Gray border around each door, and a lighter outline around each panel,
+      // so the white doors stand out from the white wall
+      const zb = zr - 0.06;
+      const line = (a0, b0, a1, b1, mat) => box(a0, b0, zb, a1, b1, zr, mat, walls.closet);
+      const B = 0.6, P = 0.3;
+      line(x0, 0.4, x0 + B, CL_H - 0.1, doorEdge);
+      line(x1 - B, 0.4, x1, CL_H - 0.1, doorEdge);
+      line(x0, CL_H - 0.1 - B, x1, CL_H - 0.1, doorEdge);
+      line(x0, 0.4, x1, 0.4 + B, doorEdge);
+      for (const [ya, yb] of [[7, 34], [39, CL_H - 4.1]]) {
+        line(x0 + ST, ya, x0 + ST + P, yb, panelEdge);
+        line(x1 - ST - P, ya, x1 - ST, yb, panelEdge);
+        line(x0 + ST, yb - P, x1 - ST, yb, panelEdge);
+        line(x0 + ST, ya, x1 - ST, ya + P, panelEdge);
+      }
+      // knob near the meeting edge of the two doors
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(1.1, 16, 12), knobMat);
+      knob.position.set(i === 0 ? x1 - 2.2 : x0 + 2.2, 36.5, zr - 1.1);
+      knob.castShadow = true;
+      walls.closet.add(knob);
+    }
+  }
+
+  // Corridor walls: the desk wall continues straight out; the other side is at x = CORR_W
+  box(-T, 0, D, 0, H, CORR_Z1, wallMat, walls.corridor);
+  box(CORR_W, 0, D + T, CORR_W + T, H, CORR_Z1, wallMat, walls.corridor);
+  box(0, 0, D + T, 0.7, 4.5, CORR_Z1, trimMat, walls.corridor);
+  box(CORR_W - 0.7, 0, D + T, CORR_W, 4.5, CORR_Z1, trimMat, walls.corridor);
+
+  // Bed wall (owns both of its corners)
+  box(W, 0, -T, W + T, H, D + T, wallMat, walls.bed);
+  box(W - 0.7, 0, 0.7, W, 4.5, D - 0.7, trimMat, walls.bed);
+
+  // ---------------------------------------------------------------------------
+  // Windows: trim, sash, glass, blinds, outdoor glow
+  // ---------------------------------------------------------------------------
+  function stripeTexture() {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 8;
+    const g = c.getContext('2d');
+    // gold and brown stripes with thin cream pinstripes
+    const bands = [
+      ['#b38a45', 40], ['#e3d3a8', 4], ['#6e4b2f', 30], ['#e3d3a8', 4],
+      ['#c39a52', 56], ['#5a3d27', 14], ['#c39a52', 56], ['#e3d3a8', 4],
+      ['#6e4b2f', 30], ['#e3d3a8', 4], ['#b38a45', 14]
+    ];
+    let x = 0;
+    for (const [col, w] of bands) { g.fillStyle = col; g.fillRect(x, 0, w, 8); x += w; }
+    const tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.wrapS = THREE.RepeatWrapping;
+    return tex;
+  }
+  const curtainTex = stripeTexture();
+
+  function curtainPanel(width, height) {
+    // Gathered fabric: a plane folded with a sine wave along its width
+    const geo = new THREE.PlaneGeometry(width, height, 64, 1);
+    const pos = geo.attributes.position;
+    const folds = 4.5, depth = 1.6;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      pos.setZ(i, Math.sin(((x + width / 2) / width) * Math.PI * 2 * folds) * depth);
+    }
+    geo.computeVertexNormals();
+    const tex = curtainTex.clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(width / 16, 1); // one stripe repeat every ~16 in of fabric
+    const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.92, side: THREE.DoubleSide, color: 0xe6ddcf });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  function outdoorGlowTexture() {
+    const c = document.createElement('canvas');
+    c.width = 4; c.height = 128;
+    const g = c.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, 0, 128);
+    grad.addColorStop(0, '#f6e7c8');
+    grad.addColorStop(0.6, '#f3ead9');
+    grad.addColorStop(1, '#d9d6c4');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 4, 128);
+    const tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+  const glowTex = outdoorGlowTexture();
+
+  function radiator(cx, sections) {
+    const group = new THREE.Group();
+    const pitch = 2.6, secW = 2.0;
+    const total = sections * pitch;
+    const x0 = cx - total / 2;
+    const zBack = 1.6, zFront = 7.2, yBot = 3, yTop = 20;
+    for (let i = 0; i < sections; i++) {
+      const sx = x0 + i * pitch + (pitch - secW) / 2;
+      box(sx, yBot, zBack, sx + secW, yTop, zFront, radMat, group);
+    }
+    // top and bottom headers
+    const header = (y) => {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, total + 1, 16), radMat);
+      m.rotation.z = Math.PI / 2;
+      m.position.set(cx, y, (zBack + zFront) / 2);
+      m.castShadow = m.receiveShadow = true;
+      group.add(m);
+    };
+    header(yTop - 1.5);
+    header(yBot + 1.5);
+    // feet
+    box(x0 + 1, 0, zBack + 0.5, x0 + 3, yBot, zFront - 0.5, radMat, group);
+    box(x0 + total - 3, 0, zBack + 0.5, x0 + total - 1, yBot, zFront - 0.5, radMat, group);
+    // valve
+    const valve = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 3, 12), rodMat);
+    valve.position.set(x0 - 1.2, yBot + 3, (zBack + zFront) / 2);
+    valve.castShadow = true;
+    group.add(valve);
+    walls.window.add(group);
+  }
+
+  // Interior casing and stool around the whole window pair
+  const CAS = 3; // casing width
+  box(OPEN_X0 - CAS, SILL_Y - 4, 0, OPEN_X0, WIN_TOP + CAS, 0.8, trimMat, walls.window);
+  box(OPEN_X1, SILL_Y - 4, 0, OPEN_X1 + CAS, WIN_TOP + CAS, 0.8, trimMat, walls.window);
+  box(OPEN_X0 - CAS, WIN_TOP, 0, OPEN_X1 + CAS, WIN_TOP + CAS + 0.5, 1.0, trimMat, walls.window);
+  box(OPEN_X0 - CAS - 1, SILL_Y - 1, -T + 1, OPEN_X1 + CAS + 1, SILL_Y + 0.5, 3, trimMat, walls.window); // stool
+  box(OPEN_X0 - CAS, SILL_Y - 4, 0, OPEN_X1 + CAS, SILL_Y - 1, 0.7, trimMat, walls.window);              // apron
+
+  // Thin mullion frame between the two windows
+  const MX0 = OPEN_X0 + WIN_W, MX1 = MX0 + MULLION;
+  box(MX0, SILL_Y, -T, MX1, WIN_TOP, 0, trimMat, walls.window);
+  box(MX0 - 0.5, SILL_Y + 0.5, 0, MX1 + 0.5, WIN_TOP, 0.8, trimMat, walls.window);
+
+  for (const cx of WINDOWS) {
+    const x0 = cx - WIN_W / 2, x1 = cx + WIN_W / 2;
+
+    // Jamb liners inside the opening
+    box(x0, SILL_Y, -T, x0 + 0.6, WIN_TOP, 0, trimMat, walls.window);
+    box(x1 - 0.6, SILL_Y, -T, x1, WIN_TOP, 0, trimMat, walls.window);
+    box(x0, WIN_TOP - 0.6, -T, x1, WIN_TOP, 0, trimMat, walls.window);
+
+    // Double-hung sash frame set back in the opening
+    const zs0 = -T + 0.4, zs1 = -T + 1.8, F = 1.4;
+    box(x0, SILL_Y, zs0, x0 + F, WIN_TOP, zs1, trimMat, walls.window);
+    box(x1 - F, SILL_Y, zs0, x1, WIN_TOP, zs1, trimMat, walls.window);
+    box(x0, SILL_Y + 0.5, zs0, x1, SILL_Y + 0.5 + F, zs1, trimMat, walls.window);
+    box(x0, WIN_TOP - F, zs0, x1, WIN_TOP, zs1, trimMat, walls.window);
+    const mid = SILL_Y + WIN_H / 2;
+    box(x0, mid - 1, zs0, x1, mid + 1, zs1, trimMat, walls.window);
+
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(WIN_W, WIN_H), glassMat);
+    glass.position.set(cx, SILL_Y + WIN_H / 2, (zs0 + zs1) / 2);
+    walls.window.add(glass);
+
+    // Bright daylight seen through the glass (does not block the sun)
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(WIN_W + 2, WIN_H + 2),
+      new THREE.MeshBasicMaterial({ map: glowTex, toneMapped: false })
+    );
+    glow.position.set(cx, SILL_Y + WIN_H / 2, -T - 0.3);
+    walls.window.add(glow);
+
+    // Horizontal blinds, lowered over the top two-thirds, slats tilted open
+    const BL_W = WIN_W - 1.6, zb = -0.9;
+    box(x0 + 0.8, WIN_TOP - 2.2, zb - 1, x1 - 0.8, WIN_TOP - 0.6, zb + 1, blindMat, walls.window); // headrail
+    const blindBottom = SILL_Y + WIN_H * 0.36;
+    const slatGeo = new THREE.BoxGeometry(BL_W, 0.08, 1.4);
+    for (let y = WIN_TOP - 3.4; y > blindBottom + 1; y -= 1.25) {
+      const s = new THREE.Mesh(slatGeo, blindMat);
+      s.position.set(cx, y, zb);
+      s.rotation.x = -0.55;
+      s.castShadow = true;
+      s.receiveShadow = true;
+      walls.window.add(s);
+    }
+    box(x0 + 0.8, blindBottom - 0.4, zb - 0.8, x1 - 0.8, blindBottom + 0.6, zb + 0.8, blindMat, walls.window); // bottom rail
+  }
+
+  // One black curtain rod, 85 in wide, centered on the window pair
+  const rodY = WIN_TOP + 4.3, rodZ = 6, rodLen = 85;
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, rodLen, 12), rodMat);
+  rod.rotation.z = Math.PI / 2;
+  rod.position.set(OPEN_CX, rodY, rodZ);
+  rod.castShadow = true;
+  walls.window.add(rod);
+  for (const side of [-1, 1]) {
+    const fin = new THREE.Mesh(new THREE.SphereGeometry(1.0, 14, 10), rodMat);
+    fin.position.set(OPEN_CX + side * (rodLen / 2 + 0.7), rodY, rodZ);
+    fin.castShadow = true;
+    walls.window.add(fin);
+    const bx = OPEN_CX + side * (rodLen / 2 - 4);
+    box(bx - 0.5, rodY - 0.5, 0, bx + 0.5, rodY + 0.5, rodZ, rodMat, walls.window); // bracket
+  }
+  // center support bracket over the mullion
+  box(OPEN_CX - 0.5, rodY - 0.5, 0, OPEN_CX + 0.5, rodY + 0.5, rodZ, rodMat, walls.window);
+
+  // Three curtain panels: one on each outer side, one over the mullion.
+  // They end just above the radiator.
+  const PANEL_W = 12, curtainBottom = 22, curtainTop = rodY - 0.5;
+  const ph = curtainTop - curtainBottom;
+  const panelCenters = [
+    OPEN_X0 + 3 - PANEL_W / 2,  // outer, desk side
+    (MX0 + MX1) / 2,            // middle
+    OPEN_X1 - 3 + PANEL_W / 2   // outer, bed side
+  ];
+  for (const px of panelCenters) {
+    const p = curtainPanel(PANEL_W, ph);
+    p.position.set(px, curtainBottom + ph / 2, rodZ);
+    walls.window.add(p);
+  }
+
+  // One radiator spanning most of the window pair
+  radiator(OPEN_CX, 19);
+
+  // ---------------------------------------------------------------------------
+  // Furniture (added one piece at a time)
+  // ---------------------------------------------------------------------------
+  const furniture = new THREE.Group();
+  furniture.name = 'furniture';
+  scene.add(furniture);
+
+  function canvasTexture(size, draw, repeat = 1) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    draw(c.getContext('2d'), size);
+    const tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repeat, repeat);
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return tex;
+  }
+
+  // Puffy pillow: width along x, height along y, thickness along z
+  function pillowGeometry(w, h, t) {
+    const geo = new THREE.BoxGeometry(w, h, t, 20, 20, 4);
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const nx = Math.abs(p.getX(i) / (w / 2)), ny = Math.abs(p.getY(i) / (h / 2));
+      const f = Math.max((1 - nx ** 2.5) * (1 - ny ** 2.5), 0.12);
+      p.setZ(i, p.getZ(i) * f);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  // Comforter draped over a mattress top. Local axes: x across the bed,
+  // z from the head edge toward the foot, y up from the mattress top.
+  function comforterGeometry(width, len, drop, r) {
+    const arc = r * Math.PI / 2, over = arc + drop;
+    const fw = width + 2 * over, fl = len + over;
+    const geo = new THREE.PlaneGeometry(fw, fl, 110, 110);
+    const p = geo.attributes.position;
+    const bend = (a) => {               // distance past an edge -> [outward, down]
+      if (a <= 0) return [a, 0];
+      if (a < arc) { const th = a / r; return [r * Math.sin(th), -r * (1 - Math.cos(th))]; }
+      return [r, -r - (a - arc)];
+    };
+    for (let i = 0; i < p.count; i++) {
+      const s = p.getX(i), t = fl / 2 - p.getY(i);
+      const [ox, dx] = bend(Math.abs(s) - width / 2);
+      const [oz, dz] = bend(t - len);
+      const X = Math.sign(s) * (width / 2 + ox);
+      const Z = len + oz;
+      const inside = Math.max(0, 1 - (Math.abs(s) / (width / 2)) ** 4) * Math.max(0, 1 - Math.abs((t - len / 2) / (len / 2)) ** 4);
+      const wrinkle = 0.22 * Math.sin(s * 0.35 + t * 0.12) * Math.sin(t * 0.21 - s * 0.05);
+      p.setXYZ(i, X, Math.min(dx, dz) + 1.4 * inside + wrinkle * inside + 0.3, Z);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  // ---- Bed: headboard against the closet wall, foot toward the window wall,
+  //      long side along the bed wall. Built in local space, then rotated into place. ----
+  (function bed() {
+    const BED_W = 57;                         // frame width (full size)
+    const MAT_W = 54, MAT_L = 75, MAT_TOP = 24;   // standard full mattress; 80 in overall
+    // Local space: +x runs from the foot toward the headboard, z = 0 is the bed-wall side.
+    const bedGroup = new THREE.Group();
+    const xHeadBack = 0;
+    const xHead = xHeadBack - 3.5;            // front face of the headboard
+    const xFoot = xHead - MAT_L - 1.5;        // outer face of the foot rail
+    const z0 = 0.3, z1 = z0 + BED_W, zc = (z0 + z1) / 2;
+
+    const woodTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#3d2a1e'; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 70; i++) {
+        g.strokeStyle = `rgba(${rand() < 0.5 ? '20,12,8' : '90,62,44'}, ${0.15 + rand() * 0.25})`;
+        g.lineWidth = 0.5 + rand() * 1.5;
+        const y = rand() * s;
+        g.beginPath(); g.moveTo(0, y);
+        g.bezierCurveTo(s * 0.3, y + (rand() - 0.5) * 6, s * 0.7, y + (rand() - 0.5) * 6, s, y);
+        g.stroke();
+      }
+    }, 0.5);
+    const wood = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.55, color: 0xcfc6bf });
+    const sheet = new THREE.MeshStandardMaterial({ color: 0x34373b, roughness: 0.95 });
+    const under = new THREE.MeshStandardMaterial({ color: 0x2a211b, roughness: 1 });
+
+    // Frame: side rails, foot rail, legs, deck under the mattress
+    box(xFoot, 4, z0, xHead, 13, z0 + 1.5, wood, bedGroup);
+    box(xFoot, 4, z1 - 1.5, xHead, 13, z1, wood, bedGroup);
+    box(xFoot, 4, z0, xFoot + 1.5, 14, z1, wood, bedGroup);
+    box(xFoot, 0, z0, xFoot + 3, 4, z0 + 3, wood, bedGroup);
+    box(xFoot, 0, z1 - 3, xFoot + 3, 4, z1, wood, bedGroup);
+    box(xFoot + 1.5, 10.5, z0 + 1.5, xHead, 12.5, z1 - 1.5, under, bedGroup);
+
+    // Headboard: two posts, a panel, and a top rail
+    box(xHead, 0, z0, xHeadBack, 52, z0 + 3, wood, bedGroup);
+    box(xHead, 0, z1 - 3, xHeadBack, 52, z1, wood, bedGroup);
+    box(xHead + 0.8, 10, z0 + 3, xHeadBack - 0.6, 47, z1 - 3, wood, bedGroup);
+    box(xHead - 0.3, 47, z0 - 0.3, xHeadBack, 50.5, z1 + 0.3, wood, bedGroup);
+
+    // Mattress in gray sheets
+    const mattress = box(xHead - MAT_L, 12.5, zc - MAT_W / 2, xHead, MAT_TOP, zc + MAT_W / 2, sheet, bedGroup);
+
+    // White comforter with a gray floral print, turned down below the pillows
+    const floral = canvasTexture(512, (g, s) => {
+      g.fillStyle = '#f2f0ec'; g.fillRect(0, 0, s, s);
+      const flower = (x, y, rad) => {
+        for (let k = 0; k < 2; k++) {               // leaves
+          const a = rand() * Math.PI * 2;
+          g.fillStyle = 'rgba(150, 154, 158, 0.4)';
+          g.beginPath();
+          g.ellipse(x + Math.cos(a) * rad * 1.6, y + Math.sin(a) * rad * 1.6, rad * 0.9, rad * 0.38, a, 0, Math.PI * 2);
+          g.fill();
+        }
+        const petals = 5 + Math.floor(rand() * 2), rot = rand() * Math.PI;
+        g.fillStyle = 'rgba(140, 144, 149, 0.6)';
+        for (let k = 0; k < petals; k++) {
+          const a = rot + k * Math.PI * 2 / petals;
+          g.beginPath();
+          g.ellipse(x + Math.cos(a) * rad * 0.62, y + Math.sin(a) * rad * 0.62, rad * 0.55, rad * 0.34, a, 0, Math.PI * 2);
+          g.fill();
+        }
+        g.fillStyle = '#7d8086';
+        g.beginPath(); g.arc(x, y, rad * 0.24, 0, Math.PI * 2); g.fill();
+      };
+      for (let i = 0; i < 26; i++) {
+        const x = rand() * s, y = rand() * s, rad = 10 + rand() * 12;
+        for (const ox of [-s, 0, s]) for (const oy of [-s, 0, s]) {
+          if (x + ox > -60 && x + ox < s + 60 && y + oy > -60 && y + oy < s + 60) flower(x + ox, y + oy, rad);
+        }
+      }
+    }, 1);
+    const COMF_LEN = MAT_L - 20;
+    const comfGeo = comforterGeometry(MAT_W, COMF_LEN, 6, 4);
+    floral.repeat.set(2.4, 2.4);
+    const comforter = new THREE.Mesh(comfGeo, new THREE.MeshStandardMaterial({
+      map: floral, roughness: 0.92, side: THREE.DoubleSide
+    }));
+    comforter.rotation.y = -Math.PI / 2;      // local +z (toward foot) -> world -x
+    comforter.position.set(xHead - 20, MAT_TOP, zc);
+    comforter.castShadow = comforter.receiveShadow = true;
+    bedGroup.add(comforter);
+    // Turned-down fold along the comforter's head edge
+    const fold = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, MAT_W + 1, 20), comforter.material);
+    fold.rotation.x = Math.PI / 2;
+    fold.position.set(xHead - 20, MAT_TOP + 1.7, zc);
+    fold.castShadow = fold.receiveShadow = true;
+    bedGroup.add(fold);
+
+    // Pillows: beige sleeping pillows in back, blue plaid shams in front
+    const beige = new THREE.MeshStandardMaterial({ color: 0xcdbb9c, roughness: 0.95 });
+    const plaid = new THREE.MeshStandardMaterial({
+      roughness: 0.95,
+      map: canvasTexture(128, (g, s) => {
+        g.fillStyle = '#5f7c99'; g.fillRect(0, 0, s, s);
+        const band = (pos, w, col) => {
+          g.fillStyle = col;
+          g.fillRect(pos, 0, w, s);
+          g.fillRect(0, pos, s, w);
+        };
+        band(0, 30, 'rgba(36, 52, 76, 0.55)');
+        band(64, 30, 'rgba(36, 52, 76, 0.55)');
+        band(44, 4, 'rgba(225, 230, 234, 0.7)');
+        band(108, 4, 'rgba(225, 230, 234, 0.7)');
+        band(52, 2, 'rgba(150, 120, 80, 0.6)');
+      }, 1.5)
+    });
+    const pillow = (mat, w, h, t, lean, x, y, z) => {
+      const holder = new THREE.Group();
+      const m = new THREE.Mesh(pillowGeometry(w, h, t), mat);
+      m.rotation.x = lean;                   // top tips back toward the headboard
+      m.castShadow = m.receiveShadow = true;
+      holder.add(m);
+      holder.rotation.y = Math.PI / 2;       // pillow face points toward the foot
+      holder.position.set(x, y, z);
+      bedGroup.add(holder);
+    };
+    for (const side of [-1, 1]) {
+      pillow(beige, 25, 17, 7, 0.38, xHead - 7, MAT_TOP + 8.2, zc + side * 13);
+      pillow(plaid, 18, 17, 6, 0.5, xHead - 13, MAT_TOP + 7.4, zc + side * 10.5);
+    }
+
+    // Rotate so local +x (toward the headboard) points at the closet wall and
+    // local z = 0 sits against the bed wall: world x = P.x - z, world z = P.z + x.
+    bedGroup.rotation.y = -Math.PI / 2;
+    bedGroup.position.set(W - 0.7, 0, D - 0.7);   // clear of both baseboards
+    furniture.add(bedGroup);
+  })();
+
+  // ---- Nightstand: black, beside the headboard against the closet wall,
+  //      long side parallel to the bed. Open frame: four legs, a top, and a middle shelf ----
+  (function nightstand() {
+    const LEN = 40, DEPTH = 12, HT = 24;
+    const BED_EDGE_X = W - 0.7 - 0.3 - 57;     // bed frame's room-side edge
+    const x1 = BED_EDGE_X - 1.5, x0 = x1 - DEPTH;
+    const z1 = D - 0.7, z0 = z1 - LEN;
+    const black = new THREE.MeshStandardMaterial({ color: 0x080809, roughness: 0.6 });
+    const n = furniture, LEG = 1.5;
+
+    for (const [lx, lz] of [[x0, z0], [x1 - LEG, z0], [x0, z1 - LEG], [x1 - LEG, z1 - LEG]]) {
+      box(lx, 0, lz, lx + LEG, HT - 1, lz + LEG, black, n);
+    }
+    box(x0, HT - 1, z0, x1, HT, z1, black, n);   // top
+    box(x0, 11, z0, x1, 12, z1, black, n);       // middle shelf
+  })();
+
+  // ---- Bookshelf: black, against the window wall beside the windows, facing the foot of the bed.
+  //      Solid back, two shelves inside plus the top. ----
+  (function bookshelf() {
+    const WID = 32, HT = 47, DEP = 12, TH = 0.75;
+    const x0 = 130, x1 = x0 + WID;
+    const z0 = 0.7, z1 = z0 + DEP;                 // back against the baseboard, open side faces the bed
+    const black = new THREE.MeshStandardMaterial({ color: 0x0c0c0d, roughness: 0.55 });
+    const n = furniture;
+
+    box(x0, 0, z0, x0 + TH, HT, z1, black, n);               // sides
+    box(x1 - TH, 0, z0, x1, HT, z1, black, n);
+    box(x0 + TH, HT - TH, z0, x1 - TH, HT, z1, black, n);    // top
+    box(x0 + TH, 0, z1 - 1.2, x1 - TH, 2.5, z1 - 0.5, black, n); // toe kick
+    box(x0 + TH, 2.5, z0, x1 - TH, 2.5 + TH, z1, black, n);  // bottom
+    box(x0 + TH, 2.5 + TH, z0, x1 - TH, HT - TH, z0 + 0.3, black, n); // solid back
+
+    // two evenly spaced shelves between the bottom and the top
+    const inner0 = 2.5 + TH, inner1 = HT - TH;
+    const gap = (inner1 - inner0 - 2 * TH) / 3;
+    for (let i = 1; i <= 2; i++) {
+      const y = inner0 + i * gap + (i - 1) * TH;
+      box(x0 + TH, y, z0 + 0.3, x1 - TH, y + TH, z1, black, n);
+    }
+  })();
+
+  // ---- Floor lamp: black, 65 in tall with an upturned bowl shade,
+  //      in the gap between the foot of the bed and the bookshelf ----
+  (function floorLamp() {
+    const HT = 65, BOWL_H = 6, BOWL_R = 6.5;
+    const black = new THREE.MeshStandardMaterial({ color: 0x0e0e10, roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide });
+    const lamp = new THREE.Group();
+    const add = (geo, y) => {
+      const m = new THREE.Mesh(geo, black);
+      m.position.y = y;
+      m.castShadow = m.receiveShadow = true;
+      lamp.add(m);
+    };
+    add(new THREE.CylinderGeometry(5, 5.4, 1, 32), 0.5);                 // weighted base
+    add(new THREE.CylinderGeometry(0.45, 0.45, HT - BOWL_H - 1, 12), (HT - BOWL_H + 1) / 2); // pole
+    add(new THREE.CylinderGeometry(1.1, 0.8, 1.2, 16), HT - BOWL_H);     // collar under the bowl
+    // Bowl shade: bottom quarter of its height black, upper three quarters white
+    const white = new THREE.MeshStandardMaterial({ color: 0xf0eee9, roughness: 0.5, side: THREE.DoubleSide });
+    const bowlProfile = (f0, f1) => {
+      const pts = [];
+      for (let i = 0; i <= 16; i++) {
+        const f = f0 + (f1 - f0) * (i / 16);           // fraction of the bowl's height
+        const t = Math.acos(1 - f);
+        pts.push(new THREE.Vector2(0.9 + (BOWL_R - 0.9) * Math.sin(t), (HT - BOWL_H) + BOWL_H * f));
+      }
+      return new THREE.LatheGeometry(pts, 40);
+    };
+    add(bowlProfile(0, 0.25), 0);
+    const top = new THREE.Mesh(bowlProfile(0.25, 1), white);
+    top.castShadow = top.receiveShadow = true;
+    lamp.add(top);
+    // Beside the bed wall, between the foot of the bed and the bookshelf
+    lamp.position.set(W - 0.7 - BOWL_R - 0.5, 0, 26);
+    furniture.add(lamp);
+  })();
+
+  // ---- Wall-mounted AC (mini-split head): white, high on the bed wall above the
+  //      bookshelf and lamp. Fades with the bed wall. ----
+  (function wallAC() {
+    const LEN = 32, HT = 11, DEP = 8.5, Y0 = 78;
+    const zc = 22, z0 = zc - LEN / 2, z1 = zc + LEN / 2;
+    const xb = W - 0.1, xf = xb - DEP;                 // back on the wall, front faces the room
+    const white = new THREE.MeshStandardMaterial({ color: 0xf3f3f1, roughness: 0.35 });
+    const gray = new THREE.MeshStandardMaterial({ color: 0xc9cacb, roughness: 0.5 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x3a3c3f, roughness: 0.6 });
+    const g = walls.bed;
+
+    box(xf + 2, Y0, z0, xb, Y0 + HT, z1, white, g);              // body
+    box(xf, Y0 + 2.5, z0, xf + 2, Y0 + HT - 2, z1, white, g);    // front panel
+    const roundEdge = (y) => {                                    // rounded top and bottom front edges
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, LEN, 20), white);
+      m.rotation.x = Math.PI / 2;
+      m.position.set(xf + 2, y, zc);
+      m.castShadow = m.receiveShadow = true;
+      g.add(m);
+    };
+    roundEdge(Y0 + HT - 2);
+    roundEdge(Y0 + 2.5);
+    box(xf + 0.6, Y0 + 0.6, z0 + 1.5, xf + 3.5, Y0 + 1.6, z1 - 1.5, dark, g);  // air outlet
+    box(xf + 0.4, Y0 + 1.0, z0 + 2, xf + 3.2, Y0 + 1.25, z1 - 2, gray, g);     // louver vane
+    box(xf - 0.05, Y0 + HT - 4, z1 - 5, xf, Y0 + HT - 3.4, z1 - 3, dark, g);   // status display
+  })();
+
+  // ---- PC desk: black, 60 in along the desk wall, in the window-wall corner ----
+  const DESK = { x0: 1, x1: 29, z0: 1, z1: 61, top: 30 };
+  (function desk() {
+    const { x0, x1, z0, z1, top } = DESK;
+    const black = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.5 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.35, metalness: 0.6 });
+    const n = furniture;
+
+    box(x0, top - 1.2, z0, x1, top, z1, black, n);                    // desktop
+    for (const zEnd of [z0 + 2, z1 - 4]) {                            // end frames
+      box(x0 + 2, 0, zEnd, x0 + 4, top - 1.2, zEnd + 2, metal, n);    // back leg
+      box(x1 - 4, 0, zEnd, x1 - 2, top - 1.2, zEnd + 2, metal, n);    // front leg
+      box(x0 + 1, 0, zEnd - 0.5, x1 - 1, 1.2, zEnd + 2.5, metal, n);  // foot
+      box(x0 + 2, top - 3.5, zEnd, x1 - 2, top - 1.2, zEnd + 2, metal, n); // top rail
+    }
+    box(x0 + 2, top - 3.5, z0 + 4, x0 + 3.5, top - 1.2, z1 - 4, metal, n); // back stretcher
+
+    // Two monitors, angled slightly toward the chair
+    const bezel = new THREE.MeshStandardMaterial({ color: 0x0d0d0f, roughness: 0.4 });
+    const screen = new THREE.MeshStandardMaterial({
+      color: 0x101418, roughness: 0.2, metalness: 0.1, emissive: 0x2a3a4e, emissiveIntensity: 0.55
+    });
+    const zc = (z0 + z1) / 2;
+    for (const side of [-1, 1]) {
+      const m = new THREE.Group();
+      box(-5, 0, -4, 1, 0.5, 4, bezel, m);          // base, centered under the neck
+      box(-2.6, 0.5, -0.9, -1.0, 12, 0.9, bezel, m);  // neck, behind the monitor body
+      box(-1.0, 5, -10.9, 0, 19.2, 10.9, bezel, m);   // monitor body (21.8 x 14.2)
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(20.8, 12.4), screen);
+      glass.rotation.y = Math.PI / 2;               // faces +x, toward the room
+      glass.position.set(0.01, 12.2, 0);
+      m.add(glass);
+      m.position.set(x0 + 9, top, zc + side * 11.6);
+      m.rotation.y = side * 0.22;                   // turn inward toward the seat
+      n.add(m);
+    }
+  })();
+
+  // ---- Desk setup: keyboard in front of the monitors; big square red mousepad with a black
+  //      wireless mouse on the right (the -z side, as seen from the chair) ----
+  (function deskSetup() {
+    const top = DESK.top, zc = (DESK.z0 + DESK.z1) / 2;
+    const red = new THREE.MeshStandardMaterial({ color: 0x9a1616, roughness: 0.95 });
+    const MX = 20.5, MZ = zc - 17;                                         // mouse position
+    box(MX - 8, top, MZ - 8, MX + 8, top + 0.15, MZ + 8, red, furniture);  // 16 x 16 square pad
+
+    // Keyboard (tenkeyless, 14.5 x 5.5): case plus a keycap texture on the top face.
+    // Canvas x runs across the depth (far row -> near row), canvas y along the length.
+    const KL = 14.5, KD = 5.5, PX = 24;
+    const kc = document.createElement('canvas');
+    kc.width = KD * PX; kc.height = KL * PX;
+    const g = kc.getContext('2d');
+    g.fillStyle = '#16171a'; g.fillRect(0, 0, kc.width, kc.height);
+    const rows = [
+      [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5],
+      [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2],
+      [1.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5],
+      [1.75, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2.25],
+      [2.25, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2.75],
+      [1.25, 1.25, 1.25, 6.25, 1.25, 1.25, 1.25, 1.25]
+    ];
+    const unit = (kc.height - 12) / 15, rowH = (kc.width - 10) / rows.length;
+    rows.forEach((row, r) => {
+      let y = 6;
+      for (const w of row) {
+        g.fillStyle = '#2b2d31';
+        g.fillRect(5 + r * rowH + 2, y + 2, rowH - 4, w * unit - 4);
+        g.fillStyle = 'rgba(255,255,255,0.06)';
+        g.fillRect(5 + r * rowH + 4, y + 4, rowH - 8, w * unit - 8);
+        y += w * unit;
+      }
+    });
+    const keys = new THREE.CanvasTexture(kc);
+    keys.encoding = THREE.sRGBEncoding;
+    keys.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const caseMat = new THREE.MeshStandardMaterial({ color: 0x16171a, roughness: 0.6 });
+    const capMat = new THREE.MeshStandardMaterial({ map: keys, roughness: 0.7 });
+    const kb = new THREE.Mesh(new THREE.BoxGeometry(KD, 1, KL),
+      [caseMat, caseMat, capMat, caseMat, caseMat, caseMat]);
+    kb.position.set(17 + KD / 2, top + 0.5, zc + 2);
+    kb.rotation.z = 0.05;                            // slight typing tilt toward the user
+    kb.castShadow = kb.receiveShadow = true;
+    furniture.add(kb);
+
+    // Wireless mouse: a low rounded shell
+    const mouse = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16),
+      new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.45 }));
+    mouse.scale.set(2.3, 0.75, 1.3);
+    mouse.position.set(MX, top + 0.15, MZ);
+    mouse.castShadow = true;
+    furniture.add(mouse);
+  })();
+
+  // ---- Small nightstand left of the desk (closet side, seen from the chair), two drawers,
+  //      with a PC tower on top. The tower's glass side faces away from the desk. ----
+  (function pcStand() {
+    const x0 = 1, x1 = 17, z0 = DESK.z1 + 2, z1 = z0 + 16, HT = 22;
+    const black = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.5 });
+    const front = new THREE.MeshStandardMaterial({ color: 0x1d1d20, roughness: 0.42 });
+    const pull = new THREE.MeshStandardMaterial({ color: 0x9a9a9c, roughness: 0.3, metalness: 0.8 });
+    const n = furniture;
+
+    box(x0, 0, z0, x1, 2, z1, black, n);                    // plinth
+    box(x0, 2, z0, x1 - 0.4, HT - 1, z1, black, n);         // case
+    box(x0, HT - 1, z0, x1 + 0.3, HT, z1, black, n);        // top
+    for (const [ya, yb] of [[2.6, 11.2], [11.8, 20.4]]) {   // two drawers facing the room
+      box(x1 - 0.4, ya, z0 + 0.6, x1, yb, z1 - 0.6, front, n);
+      const py = (ya + yb) / 2, pz = (z0 + z1) / 2;
+      box(x1, py - 0.3, pz - 3, x1 + 0.7, py + 0.3, pz + 3, pull, n);
+    }
+
+    // PC tower: 8 wide, 17 deep, 18 tall. Front faces the room (+x); built with glass at local z = 0, then mirrored.
+    const tower = new THREE.Group();
+    const tw = 8, td = 17, th = 18, wallT = 0.4;
+    const shell = new THREE.MeshStandardMaterial({ color: 0x111113, roughness: 0.45, metalness: 0.2 });
+    const inner = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.7 });
+    const gpuMat = new THREE.MeshStandardMaterial({ color: 0x2a2b2f, roughness: 0.5, metalness: 0.4 });
+    const glow = new THREE.MeshStandardMaterial({ color: 0x9fc4ff, emissive: 0x6f9cff, emissiveIntensity: 0.9 });
+    const glass = new THREE.MeshPhysicalMaterial({
+      color: 0x8a96a6, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.28, depthWrite: false
+    });
+    // local: x = depth (0 back .. td front), y = height, z = width (0 glass side .. tw solid side)
+    box(0, 0, 0, td, wallT, tw, shell, tower);                 // bottom
+    box(0, th - wallT, 0, td, th, tw, shell, tower);           // top
+    box(0, 0, 0, wallT, th, tw, shell, tower);                 // back
+    box(td - wallT, 0, 0, td, th, tw, shell, tower);           // front
+    box(0, 0, tw - wallT, td, th, tw, shell, tower);           // solid side / motherboard tray
+    box(1, 1, tw - wallT - 0.2, td - 3, th - 1, tw - wallT, inner, tower);   // motherboard
+    box(3, 6, 1.5, td - 2.5, 7.4, tw - wallT - 0.2, gpuMat, tower);         // graphics card
+    box(3, 7.2, 1.5, td - 2.5, 7.4, 1.8, glow, tower);                      // GPU light bar
+    const cooler = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 1.8, 3, 20), gpuMat);
+    cooler.rotation.x = Math.PI / 2;
+    cooler.position.set(7, 12.5, tw - wallT - 1.7);
+    tower.add(cooler);
+    for (const fy of [5, 11.5]) {                              // front intake fans, lit rings
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.18, 8, 28), glow);
+      ring.rotation.y = Math.PI / 2;
+      ring.position.set(td - wallT - 0.6, fy, tw / 2);
+      tower.add(ring);
+    }
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(td - 0.6, th - 0.6), glass);
+    pane.position.set(td / 2, th / 2, 0.05);                   // glass side panel
+    tower.add(pane);
+    // Power button: lit, on the top panel at the front-right corner (seen from the front)
+    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.15, 20), glow);
+    btn.position.set(td - 1.4, th + 0.07, tw - 1.4);
+    tower.add(btn);
+    for (const [lx, lz] of [[1, 0.6], [td - 2, 0.6], [1, tw - 1.6], [td - 2, tw - 1.6]]) {
+      box(lx, -0.6, lz, lx + 1, 0, lz + 1, shell, tower);     // feet
+    }
+    // Mirror across z so the glass side faces the closet side (+z) instead of the desk
+    tower.scale.z = -1;
+    tower.position.set(x0 + 0.2, HT + 0.6, (z0 + z1) / 2 + tw / 2);
+    n.add(tower);
+  })();
+
+  // ---- Wall prints ----
+  // addPoster: a flat print with a thin white border, hung 0.1 in off a wall.
+  //   imagePath  image URL, relative to the page (or pass `canvas` to draw the print yourself)
+  //   width, height  print size in inches (the border is added outside this)
+  //   wall       the group it hangs in, e.g. walls.bed, so it fades with that wall
+  //   position   [x, y, z] of the print's center on the wall surface
+  //   rotationY  which way the print faces: 0 = +z, PI/2 = +x, -PI/2 = -x, PI = -z
+  // A missing image leaves a plain light gray print instead of throwing.
+  const posterLoader = new THREE.TextureLoader();
+  function addPoster({ imagePath, canvas, width, height, wall, position, rotationY = 0 }) {
+    const BORDER = 0.5, OFF = 0.1;
+    const normal = new THREE.Vector3(Math.sin(rotationY), 0, Math.cos(rotationY));
+    const at = new THREE.Vector3(...position);
+
+    const border = new THREE.Mesh(
+      new THREE.PlaneGeometry(width + 2 * BORDER, height + 2 * BORDER),
+      new THREE.MeshStandardMaterial({ color: 0xf4f3ef, roughness: 0.85, metalness: 0 })
+    );
+    border.position.copy(at).addScaledVector(normal, OFF);
+    border.rotation.y = rotationY;
+    border.receiveShadow = true;
+    wall.add(border);
+
+    const print = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height),
+      new THREE.MeshStandardMaterial({ color: 0xd3d3d1, roughness: 0.78, metalness: 0 }) // placeholder gray
+    );
+    print.position.copy(at).addScaledVector(normal, OFF + 0.02);
+    print.rotation.y = rotationY;
+    print.receiveShadow = true;
+    wall.add(print);
+
+    const applyTexture = (tex) => {
+      tex.encoding = THREE.sRGBEncoding;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      // Use the mesh's current material: wall fading may have swapped in a copy
+      const m = print.material;
+      m.map = tex;
+      m.color.set(0xffffff);
+      m.needsUpdate = true;
+    };
+    if (canvas) {
+      applyTexture(new THREE.CanvasTexture(canvas));
+    } else if (imagePath) {
+      posterLoader.load(imagePath, applyTexture, undefined,
+        () => console.warn(`Poster image not found: ${imagePath}; showing a gray placeholder.`));
+    }
+    return print;
+  }
+
+  // Stendig-style wall calendar for the current month, drawn on a canvas:
+  // black hanging bar, year and month at top right, weekday letters over thin column
+  // rules, and oversized tightly set dates in Monday-first columns.
+  function stendigCalendar(widthIn, heightIn, date = new Date()) {
+    const PX = 60;
+    const c = document.createElement('canvas');
+    c.width = widthIn * PX; c.height = heightIn * PX;
+    const g = c.getContext('2d');
+    const Wc = c.width, Hc = c.height;
+    const font = (px) => `bold ${px}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+
+    g.fillStyle = '#f7f6f2'; g.fillRect(0, 0, Wc, Hc);
+    g.fillStyle = '#111'; g.fillRect(0, 0, Wc, Hc * 0.065);       // hanging bar
+    g.fillStyle = '#2a2a2a';
+    for (const fx of [0.02, 0.5, 0.98]) {                          // grommets
+      g.beginPath(); g.arc(Wc * fx, Hc * 0.04, Hc * 0.008, 0, Math.PI * 2); g.fill();
+    }
+
+    const year = date.getFullYear(), month = date.getMonth();
+    const monthName = date.toLocaleString('en-US', { month: 'long' });
+    g.fillStyle = '#151515';
+    g.textBaseline = 'alphabetic';
+    if ('letterSpacing' in g) g.letterSpacing = `${-Hc * 0.003}px`;
+    g.font = font(Hc * 0.05);
+    const label = `${year}   ${monthName}`;
+    g.fillText(label, Wc * 0.86 - g.measureText(label).width, Hc * 0.14);
+
+    const colW = Wc / 7, pad = colW * 0.04;
+    const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    const headTop = Hc * 0.30, headSize = Hc * 0.13;
+    // thin column rules from the weekday row down
+    g.strokeStyle = 'rgba(0,0,0,0.18)'; g.lineWidth = 2;
+    for (let i = 0; i < 7; i++) {
+      g.beginPath(); g.moveTo(i * colW + 1, headTop); g.lineTo(i * colW + 1, Hc * 0.995); g.stroke();
+    }
+    g.font = font(headSize);
+    days.forEach((d, i) => g.fillText(d, i * colW + pad, headTop + headSize * 0.82));
+
+    const first = (new Date(year, month, 1).getDay() + 6) % 7;   // Monday = 0
+    const count = new Date(year, month + 1, 0).getDate();
+    const weeks = Math.ceil((first + count) / 7);
+    const gridTop = headTop + headSize * 0.92, rowH = (Hc * 0.995 - gridTop) / weeks;
+    const numSize = rowH * 1.08;
+    g.font = font(numSize);
+    if ('letterSpacing' in g) g.letterSpacing = `${-numSize * 0.07}px`;
+    for (let d = 1; d <= count; d++) {
+      const idx = first + d - 1, col = idx % 7, row = Math.floor(idx / 7);
+      const text = String(d);
+      const maxW = colW - pad * 1.5;
+      const w = g.measureText(text).width;
+      g.save();
+      g.translate(col * colW + pad, gridTop + (row + 1) * rowH - rowH * 0.06);
+      if (w > maxW) g.scale(maxW / w, 1);   // squeeze two-digit dates to fit the column
+      g.fillText(text, 0, 0);
+      g.restore();
+    }
+    return c;
+  }
+
+  // Wall calendar on the bed wall, centered over the bed's long side
+  addPoster({
+    canvas: stendigCalendar(48, 34),
+    width: 48, height: 34,
+    wall: walls.bed,
+    position: [W, 52 + 34 / 2, (39.3 + 119.3) / 2],   // bottom edge 52 in off the floor
+    rotationY: -Math.PI / 2                            // faces into the room (-x)
+  });
+
+  // Closet poster: on the right-hand closet door (seen from inside the room, facing the
+  // closet wall, right is -x), bottom edge 40 in off the floor
+  {
+    const doorX0 = CL_X0, doorX1 = CL_X0 + CL_W / 2;      // right-hand door as seen from the room
+    addPoster({
+      imagePath: (window.POSTER_IMAGES && window.POSTER_IMAGES.batman) || 'posters/batman.jpg',
+      width: 22, height: 33,
+      wall: walls.closet,
+      position: [(doorX0 + doorX1) / 2, 40 + 33 / 2, D - 0.65],  // on the door's raised frame face
+      rotationY: Math.PI                                      // faces into the room (-z)
+    });
+  }
+
+  // ---- Whiteboard on the desk wall above the PC, nudged toward the closet (+z) but well short
+  //      of the corridor. Thin cork strips along the top and bottom. Fades with the desk wall. ----
+  const whiteboard = (function whiteboard() {
+    const WID = 30, HT = 21, CORK = 1.5, F = 0.6;
+    const zc = 92, y0 = 48;
+    const z0 = zc - WID / 2, z1 = zc + WID / 2, y1 = y0 + HT;
+    const x0 = 0, x1 = 0.6;                       // depth off the wall face
+    // low metalness keeps the frame light: with no environment map, metal renders dark
+    const alu = new THREE.MeshStandardMaterial({ color: 0xe6e7e8, roughness: 0.4, metalness: 0.15 });
+    const board = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0 });
+    const cork = new THREE.MeshStandardMaterial({
+      roughness: 0.95,
+      map: canvasTexture(256, (g, s) => {
+        g.fillStyle = '#b4875a'; g.fillRect(0, 0, s, s);
+        for (let i = 0; i < 2600; i++) {
+          const l = rand();
+          g.fillStyle = l < 0.5 ? `rgba(110, 72, 40, ${0.25 + rand() * 0.35})` : `rgba(214, 178, 132, ${0.2 + rand() * 0.35})`;
+          g.fillRect(rand() * s, rand() * s, 1 + rand() * 2.5, 1 + rand() * 2.5);
+        }
+      })
+    });
+    cork.map.repeat.set(10, 0.6);
+    const g = walls.desk;
+
+    // aluminum frame
+    box(x0, y0, z0, x1 + 0.2, y0 + F, z1, alu, g);
+    box(x0, y1 - F, z0, x1 + 0.2, y1, z1, alu, g);
+    box(x0, y0, z0, x1 + 0.2, y1, z0 + F, alu, g);
+    box(x0, y0, z1 - F, x1 + 0.2, y1, z1, alu, g);
+    // cork strips and the white writing surface between them
+    box(x0, y0 + F, z0 + F, x1, y0 + F + CORK, z1 - F, cork, g);
+    box(x0, y1 - F - CORK, z0 + F, x1, y1 - F, z1 - F, cork, g);
+    const surface = box(x0, y0 + F + CORK, z0 + F, x1 - 0.05, y1 - F - CORK, z1 - F, board, g);  // board surface
+    // thin aluminum dividers between cork and whiteboard
+    box(x0, y0 + F + CORK - 0.15, z0 + F, x1 + 0.1, y0 + F + CORK + 0.15, z1 - F, alu, g);
+    box(x0, y1 - F - CORK - 0.15, z0 + F, x1 + 0.1, y1 - F - CORK + 0.15, z1 - F, alu, g);
+    // Dark gray outline around the board, and a lighter one around the writing surface,
+    // so the white board reads against the white wall (same idea as the closet doors)
+    const edge = new THREE.MeshStandardMaterial({ color: 0x6f6b66, roughness: 0.7 });
+    const inner = new THREE.MeshStandardMaterial({ color: 0xa9a59f, roughness: 0.7 });
+    const B = 0.4, xf = x1 + 0.2, wy0 = y0 + F + CORK + 0.15, wy1 = y1 - F - CORK - 0.15;
+    box(xf, y0, z0, xf + 0.06, y0 + B, z1, edge, g);
+    box(xf, y1 - B, z0, xf + 0.06, y1, z1, edge, g);
+    box(xf, y0, z0, xf + 0.06, y1, z0 + B, edge, g);
+    box(xf, y0, z1 - B, xf + 0.06, y1, z1, edge, g);
+    const P = 0.2, xw = x1 - 0.05;
+    box(xw, wy0, z0 + F, xw + 0.06, wy0 + P, z1 - F, inner, g);
+    box(xw, wy1 - P, z0 + F, xw + 0.06, wy1, z1 - F, inner, g);
+    box(xw, wy0, z0 + F, xw + 0.06, wy1, z0 + F + P, inner, g);
+    box(xw, wy0, z1 - F - P, xw + 0.06, wy1, z1 - F, inner, g);
+    // marker tray along the bottom
+    box(x1, y0 - 0.4, zc - 7, x1 + 2.2, y0 + 0.2, zc + 7, alu, g);
+    box(x1 + 1.9, y0 - 0.4, zc - 7, x1 + 2.2, y0 + 0.8, zc + 7, alu, g);
+    // The writing face is the surface box's +x face, facing into the room
+    return { surface, width: (z1 - F) - (z0 + F), height: (y1 - F - CORK) - (y0 + F + CORK) };
+  })();
+
+  // ---- Floating shelf on the window wall above the desk (fades with the window wall) ----
+  (function floatingShelf() {
+    const mat = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.5 });
+    box(1, 60, 0.7, 37, 61.5, 10.5, mat, walls.window);
+  })();
+
+  // ---- Office chair: gray mesh seat and back on a white frame, facing the desk ----
+  (function chair() {
+    const white = new THREE.MeshStandardMaterial({ color: 0xeeeeec, roughness: 0.4 });
+    const chrome = new THREE.MeshStandardMaterial({ color: 0xbfc1c4, roughness: 0.25, metalness: 0.8 });
+    const meshTex = canvasTexture(64, (g, s) => {
+      g.fillStyle = '#6f7378'; g.fillRect(0, 0, s, s);
+      g.strokeStyle = 'rgba(40, 42, 46, 0.55)'; g.lineWidth = 1;
+      for (let i = 0; i < s; i += 4) {
+        g.beginPath(); g.moveTo(i, 0); g.lineTo(i, s); g.stroke();
+        g.beginPath(); g.moveTo(0, i); g.lineTo(s, i); g.stroke();
+      }
+    }, 6);
+    const gray = new THREE.MeshStandardMaterial({ map: meshTex, color: 0xb9bcc0, roughness: 0.9 });
+    const back = new THREE.MeshStandardMaterial({
+      map: meshTex, color: 0xb9bcc0, roughness: 0.9, transparent: true, opacity: 0.88, side: THREE.DoubleSide
+    });
+
+    // Local space: the chair faces -x (toward the desk wall), seat centered on the origin.
+    const c = new THREE.Group();
+
+    // Five-star base with casters, and the gas cylinder
+    for (let i = 0; i < 5; i++) {
+      const a = i * Math.PI * 2 / 5 + 0.3;
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(12, 1.4, 1.8), white);
+      leg.position.set(Math.cos(a) * 6, 2.6, Math.sin(a) * 6);
+      leg.rotation.y = -a;
+      leg.castShadow = leg.receiveShadow = true;
+      c.add(leg);
+      const caster = new THREE.Mesh(new THREE.SphereGeometry(1.1, 12, 8), new THREE.MeshStandardMaterial({ color: 0x2a2a2c, roughness: 0.5 }));
+      caster.position.set(Math.cos(a) * 11.6, 1.1, Math.sin(a) * 11.6);
+      caster.castShadow = true;
+      c.add(caster);
+    }
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.2, 2, 16), white);
+    hub.position.y = 2.6; hub.castShadow = true; c.add(hub);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 13, 16), chrome);
+    post.position.y = 10; post.castShadow = true; c.add(post);
+
+    // Seat: white shell with a gray mesh cushion
+    box(-10, 16.5, -9.5, 10, 18, 9.5, white, c);
+    const seat = new THREE.Mesh(pillowGeometry(19, 18.5, 3.2), gray);
+    seat.rotation.x = -Math.PI / 2;
+    seat.position.set(0, 19, 0);
+    seat.castShadow = seat.receiveShadow = true;
+    c.add(seat);
+
+    // Armrests
+    for (const s of [-1, 1]) {
+      box(1, 18, s * 10 - 0.6, 3, 27, s * 10 + 0.6, white, c);
+      box(-6, 27, s * 10 - 1.4, 5, 28.2, s * 10 + 1.4, white, c);
+    }
+
+    // Backrest: white frame around a gray mesh panel, reclined slightly
+    const b = new THREE.Group();
+    const BW = 19, BH = 23;
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(BW, BH), back);
+    panel.rotation.y = Math.PI / 2;
+    panel.castShadow = true;
+    b.add(panel);
+    box(-0.6, -BH / 2, -BW / 2 - 1, 0.6, BH / 2, -BW / 2, white, b);
+    box(-0.6, -BH / 2, BW / 2, 0.6, BH / 2, BW / 2 + 1, white, b);
+    box(-0.6, BH / 2, -BW / 2 - 1, 0.6, BH / 2 + 1.2, BW / 2 + 1, white, b);
+    box(-0.6, -BH / 2 - 1, -BW / 2 - 1, 0.6, -BH / 2, BW / 2 + 1, white, b);
+    b.position.set(10.5, 21 + BH / 2 + 1, 0);
+    b.rotation.z = -0.14;                           // lean back, away from the desk
+    c.add(b);
+    box(8.5, 17, -1.2, 11, 22, 1.2, white, c);      // spine joining seat and back
+
+    c.position.set(DESK.x1 + 8, 0, (DESK.z0 + DESK.z1) / 2 + 2);
+    c.rotation.y = -0.12;
+    furniture.add(c);
+  })();
+
+  // ---------------------------------------------------------------------------
+  // Lighting
+  // ---------------------------------------------------------------------------
+  // Soft sky/ground fill so shadows never go black
+  scene.add(new THREE.HemisphereLight(0xdfe3e6, 0x8a6446, 0.55));
+  scene.add(new THREE.AmbientLight(0xfff4e6, 0.12));
+
+  // Warm sun streaming in through the windows from behind the back wall
+  const sun = new THREE.DirectionalLight(0xffd9a6, 1.7);
+  const sunTarget = new THREE.Object3D();
+  sunTarget.position.set(W / 2, 0, D / 2);
+  scene.add(sunTarget);
+  sun.target = sunTarget;
+  sun.position.copy(sunTarget.position).add(new THREE.Vector3(-25, 110, -175).setLength(320));
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(4096, 4096);
+  const sc = sun.shadow.camera;
+  sc.left = -130; sc.right = 130; sc.top = 130; sc.bottom = -130;
+  sc.near = 10; sc.far = 700;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.4;
+  sun.shadow.radius = 3;
+  scene.add(sun);
+
+  // Gentle warm bounce near each window to suggest daylight spilling in
+  for (const cx of WINDOWS) {
+    const bounce = new THREE.PointLight(0xffe2bd, 0.28, 140, 1.6);
+    bounce.position.set(cx, SILL_Y + WIN_H * 0.6, 14);
+    scene.add(bounce);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wall fading: a wall between the camera and the room fades to clear.
+  // Faded walls keep casting shadows, so the sunlight doesn't change.
+  // ---------------------------------------------------------------------------
+  const fades = Object.entries(walls).map(([name, group]) => {
+    // Give each wall its own copies of its materials so walls fade independently
+    const copies = new Map();
+    group.traverse((obj) => {
+      if (!obj.isMesh) return;
+      if (!copies.has(obj.material)) {
+        const m = obj.material.clone();
+        m.userData.base = { opacity: m.opacity, transparent: m.transparent, depthWrite: m.depthWrite };
+        copies.set(obj.material, m);
+      }
+      obj.material = copies.get(obj.material);
+    });
+    return { name, mats: [...copies.values()], alpha: 1 };
+  });
+
+  function applyAlpha(f, a) {
+    f.alpha = a;
+    const solid = a > 0.995;
+    for (const m of f.mats) {
+      const b = m.userData.base;
+      const transparent = b.transparent || !solid;
+      if (m.transparent !== transparent) { m.transparent = transparent; m.needsUpdate = true; }
+      m.opacity = b.opacity * a;
+      m.depthWrite = solid ? b.depthWrite : false;
+    }
+  }
+
+  function updateWallFades(dt, instant = false) {
+    for (const f of fades) {
+      const target = wallOutside[f.name](camera.position) ? 0 : 1;
+      if (f.alpha === target) continue;
+      const step = instant ? 1 : dt * 4; // about a quarter second to fade
+      const next = f.alpha + Math.sign(target - f.alpha) * Math.min(step, Math.abs(target - f.alpha));
+      applyAlpha(f, next);
+    }
+  }
+  updateWallFades(0, true);
+
+  // ---------------------------------------------------------------------------
+  // Interactive objects (interactive.js): click the whiteboard to focus and draw on it
+  // ---------------------------------------------------------------------------
+  const roomControls = document.querySelector('.controls');
+  const focus = RoomInteractive.createFocusController({
+    THREE, camera, controls, renderer, scene,
+    onStateChange: (state) => { roomControls.hidden = state !== 'room'; }
+  });
+  RoomInteractive.createDrawableBoard({
+    THREE, controller: focus, renderer,
+    mesh: whiteboard.surface,
+    widthIn: whiteboard.width, heightIn: whiteboard.height,
+    normal: new THREE.Vector3(1, 0, 0)
+  });
+
+  // ---------------------------------------------------------------------------
+  // Render loop
+  // ---------------------------------------------------------------------------
+  function resize() {
+    const w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    // Pull back a little on tall, narrow screens so the whole room fits
+    camera.fov = w / h < 0.9 ? 48 : 32;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const clock = new THREE.Clock();
+  renderer.setAnimationLoop(() => {
+    if (!focus.busy) controls.update();   // the focus system drives the camera while busy
+    updateWallFades(Math.min(clock.getDelta(), 0.1));
+    renderer.render(scene, camera);
+  });
+})();
+</script>
