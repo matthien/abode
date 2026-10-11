@@ -743,20 +743,58 @@
       if (shift) noteEl.style.left = `${parseFloat(noteEl.style.left) + shift}px`;
     }
 
+    // ---- with several views, hovering in the room lights just the row under the pointer ----
+    //  A see-through copy of every mesh, drawn additively and clipped to that row's height,
+    //  so shared parts (the sides, the back) only light up within the row.
+    const nearestView = (point) => {
+      let best = Infinity, at = 0;
+      views.forEach((b, i) => { const d = b.distanceToPoint(point); if (d < best) { best = d; at = i; } });
+      return at;
+    };
+    let rowGlow = null, lit = -1;
+    if (views.length > 1) {
+      renderer.localClippingEnabled = true;
+      const planes = [new THREE.Plane(up.clone(), 0), new THREE.Plane(up.clone().negate(), 0)];
+      const mat = new THREE.MeshBasicMaterial({
+        color: highlight, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
+        depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+        clippingPlanes: planes, visible: false
+      });
+      const meshes = [];
+      objects.forEach((root) => root.traverse((o) => { if (o.isMesh && !o.isInstancedMesh) meshes.push(o); }));
+      for (const o of meshes) {
+        const copy = new THREE.Mesh(o.geometry, mat);
+        copy.raycast = () => {};
+        o.add(copy);
+      }
+      rowGlow = { mat, planes };
+    }
+    function lightRow(i) {
+      if (i === lit) return;
+      lit = i;
+      if (i < 0) { rowGlow.mat.visible = false; return; }
+      const v = views[i];
+      const lo = Math.min(v.min.dot(up), v.max.dot(up)), hi = Math.max(v.min.dot(up), v.max.dot(up));
+      rowGlow.planes[0].constant = -lo;   // keep above the bottom
+      rowGlow.planes[1].constant = hi;    // and below the top
+      rowGlow.mat.visible = true;
+    }
+    if (rowGlow) {
+      el.addEventListener('pointermove', (e) => {
+        if (controller.state !== 'room' || e.buttons) { lightRow(-1); return; }
+        const hit = controller.setRay(e).intersectObjects(controller.scene.children, true).find((h) => controller.isSeen(h.object));
+        lightRow(hit && isInside(hit.object) ? nearestView(hit.point) : -1);
+      });
+      el.addEventListener('pointerleave', () => lightRow(-1));
+    }
+
     const item = {
       mesh: null,
       owns: isInside,
-      onHover(on) { glow(objects, on, 0.22); },
+      onHover(on) { if (rowGlow) { if (!on) lightRow(-1); } else glow(objects, on, 0.22); },
       getFocusView(cam, hit) {
         // Start on the view nearest where you clicked
-        index = 0;
-        if (hit && views.length > 1) {
-          let best = Infinity;
-          views.forEach((b, i) => {
-            const dist = b.distanceToPoint(hit.point);
-            if (dist < best) { best = dist; index = i; }
-          });
-        }
+        index = hit && views.length > 1 ? nearestView(hit.point) : 0;
         sync();
         return viewFor(cam, index);
       },

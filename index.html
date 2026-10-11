@@ -782,6 +782,65 @@
     return { group: n, views, books };
   })();
 
+  // ---- Backpack: black Herschel-style daypack on the floor left of the bookshelf,
+  //      leaning against the wall and the bookshelf ----
+  (function backpack() {
+    const BW = 12, BH = 17, BD = 5.5, R = 2.2;
+    const nylon = new THREE.MeshStandardMaterial({ color: 0x151517, roughness: 0.85 });
+    const teeth = new THREE.MeshStandardMaterial({ color: 0x2b2b2e, roughness: 0.5, metalness: 0.4 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0x4a4a4e, roughness: 0.35, metalness: 0.8 });
+    const bag = new THREE.Group();
+    const add = (mesh, x, y, z) => { mesh.position.set(x, y, z); mesh.castShadow = mesh.receiveShadow = true; bag.add(mesh); return mesh; };
+
+    add(new THREE.Mesh(new THREE.RoundedBoxGeometry(BW, BH, BD, 4, R), nylon), 0, BH / 2, 0);   // body
+
+    // Main zipper: around the front panel's edge, up one side, over the top and down the other
+    const zf = 1.8, cr = Math.sqrt(R * R - (zf - (BD / 2 - R)) ** 2) + 0.08;   // corner radius at that depth
+    const cx = BW / 2 - R, cy = BH - R, pts = [];
+    pts.push(new THREE.Vector3(-(cx + cr), 4, zf));
+    for (let i = 0; i <= 8; i++) { const a = Math.PI - (i / 8) * Math.PI / 2; pts.push(new THREE.Vector3(-cx + cr * Math.cos(a), cy + cr * Math.sin(a), zf)); }
+    for (let i = 0; i <= 8; i++) { const a = Math.PI / 2 - (i / 8) * Math.PI / 2; pts.push(new THREE.Vector3(cx + cr * Math.cos(a), cy + cr * Math.sin(a), zf)); }
+    pts.push(new THREE.Vector3(cx + cr, 4, zf));
+    add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.12, 6), teeth), 0, 0, 0);
+    // two pulls meeting near the top
+    for (const x of [-0.7, 0.7]) {
+      const pull = add(new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.1, 0.12), metal), x, BH - R + cr - 0.4, zf + 0.35);
+      pull.rotation.x = -0.5;
+    }
+
+    // Front pocket with its own zipper and the woven label
+    const PW = 9.5, PH = 8, PD = 1.6;
+    add(new THREE.Mesh(new THREE.RoundedBoxGeometry(PW, PH, PD, 3, 0.75), nylon), 0, 5.6, BD / 2 + PD / 2 - 0.5);
+    const pz = BD / 2 + PD - 0.5;   // pocket front
+    add(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, PW - 1.8, 6), teeth), 0, 5.6 + PH / 2 - 0.9, pz).rotation.z = Math.PI / 2;
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.1, 0.12), metal), PW / 2 - 1.3, 5.6 + PH / 2 - 1.55, pz + 0.05);
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 96;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#121214'; g.fillRect(0, 0, 256, 96);
+    g.strokeStyle = '#d9d4c8'; g.lineWidth = 3; g.strokeRect(6, 6, 244, 84);
+    g.fillStyle = '#d9d4c8'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '700 30px Georgia, serif'; g.fillText('HERSCHEL', 128, 40);
+    g.font = '600 15px system-ui, sans-serif'; g.fillText('SUPPLY CO.', 128, 68);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.encoding = THREE.sRGBEncoding;
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 1.2), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 }));
+    label.position.set(0, 5.6 + 0.6, pz + 0.02);
+    bag.add(label);
+
+    // Haul loop on top, toward the back
+    const loop = add(new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.16, 6, 16, Math.PI), nylon), 0, BH - 0.15, -1.2);
+    loop.rotation.y = Math.PI / 2;
+    loop.scale.set(1, 1, 1.8);
+
+    // Stand it in the corner, leaning back against the wall and sideways against the
+    // bookshelf's left side (x = 130)
+    const lean = 0.06, tip = 0.08;
+    bag.rotation.set(-lean, 0, -tip);
+    bag.position.set(130 - 0.05 - (BW / 2) * Math.cos(tip) - BH * Math.sin(tip), 0, 0.7 + BD / 2 + BH * lean);
+    furniture.add(bag);
+  })();
+
   // ---- Floor lamp: black, 65 in tall with an upturned bowl shade,
   //      in the gap between the foot of the bed and the bookshelf ----
   (function floorLamp() {
@@ -935,6 +994,83 @@
     mouse.position.set(MX, top + 0.15, MZ);
     mouse.castShadow = true;
     furniture.add(mouse);
+  })();
+
+  // ---- Laptop: 13 in silver MacBook Air, open, on the left of the desk as seen from the
+  //      chair (+z), in front of the left monitor and turned a little toward the seat ----
+  (function laptop() {
+    const LD = 8.46, LW = 11.97, LT = 0.44;          // depth, width, thickness (in)
+    const silver = new THREE.MeshStandardMaterial({ color: 0xd3d6db, roughness: 0.38, metalness: 0.3 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x0b0b0d, roughness: 0.5 });
+    const lap = new THREE.Group();
+    // Local space: user sits toward +x, width along z, hinge at the back (-x)
+    const base = new THREE.Mesh(new THREE.RoundedBoxGeometry(LD, LT, LW, 3, 0.16), silver);
+    base.position.y = LT / 2;
+    lap.add(base);
+
+    // Keyboard (black keys in a well) and trackpad on the deck
+    const kc = document.createElement('canvas');
+    kc.width = 120; kc.height = 300;                  // x: depth (back -> front), y: width
+    const g = kc.getContext('2d');
+    g.fillStyle = '#c9ccd1'; g.fillRect(0, 0, 120, 300);
+    const rows = 6, cols = 14;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (r === 5 && c > 3 && c < 9) continue;
+      g.fillStyle = '#121214';
+      g.fillRect(3 + r * 19.5, 3 + c * 21, r === 0 ? 10 : 16.5, 18);
+    }
+    g.fillStyle = '#121214'; g.fillRect(3 + 5 * 19.5, 3 + 4 * 21, 16.5, 5 * 21 - 3);   // space bar
+    const keys = new THREE.CanvasTexture(kc);
+    keys.encoding = THREE.sRGBEncoding;
+    const deck = new THREE.Mesh(new THREE.PlaneGeometry(4.3, 10.8), new THREE.MeshStandardMaterial({ map: keys, roughness: 0.6 }));
+    deck.rotation.x = -Math.PI / 2;                    // canvas x runs toward the user, y along the width
+    deck.position.set(-LD / 2 + 0.6 + 4.3 / 2, LT + 0.005, 0);
+    lap.add(deck);
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 4.8),
+      new THREE.MeshStandardMaterial({ color: 0xbfc2c7, roughness: 0.3, metalness: 0.2 }));
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(LD / 2 - 0.35 - 3.1 / 2, LT + 0.005, 0);
+    lap.add(pad);
+
+    // Lid on a hinge at the back, opened about 110 degrees
+    const hinge = new THREE.Group();
+    hinge.position.set(-LD / 2 + 0.1, LT, 0);
+    hinge.rotation.z = 0.35;
+    lap.add(hinge);
+    const LH = 8.1;
+    const lid = new THREE.Mesh(new THREE.RoundedBoxGeometry(0.2, LH, LW, 3, 0.08), silver);
+    lid.position.set(0, LH / 2, 0);
+    hinge.add(lid);
+    // Display: black glass with the screen inset, a notch at the top
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(LW - 0.3, LH - 0.3), dark);
+    glass.rotation.y = Math.PI / 2;
+    glass.position.set(0.105, LH / 2, 0);
+    hinge.add(glass);
+    const sc = document.createElement('canvas');
+    sc.width = 512; sc.height = 330;
+    const s = sc.getContext('2d');
+    const grad = s.createLinearGradient(0, 0, 512, 330);
+    grad.addColorStop(0, '#1d3a6e'); grad.addColorStop(0.55, '#5b6fb3'); grad.addColorStop(1, '#e3a3b8');
+    s.fillStyle = grad; s.fillRect(0, 0, 512, 330);
+    s.fillStyle = 'rgba(20,20,24,0.55)'; s.fillRect(0, 0, 512, 9);                       // menu bar
+    s.fillStyle = 'rgba(255,255,255,0.22)';
+    s.beginPath(); s.roundRect(150, 300, 212, 22, 7); s.fill();                          // dock
+    const shot = new THREE.CanvasTexture(sc);
+    shot.encoding = THREE.sRGBEncoding;
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(LW - 0.9, LH - 1.0),
+      new THREE.MeshStandardMaterial({ map: shot, emissive: 0xffffff, emissiveMap: shot, emissiveIntensity: 0.55, roughness: 0.25 }));
+    screen.rotation.y = Math.PI / 2;
+    screen.position.set(0.11, LH / 2 + 0.05, 0);
+    hinge.add(screen);
+    const notch = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.22), dark);
+    notch.rotation.y = Math.PI / 2;
+    notch.position.set(0.115, LH - 0.55, 0);
+    hinge.add(notch);
+
+    lap.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    lap.position.set(22, DESK.top, 51);
+    lap.rotation.y = 0.25;                            // angled toward the chair
+    furniture.add(lap);
   })();
 
   // ---- Small nightstand left of the desk (closet side, seen from the chair), two drawers,
