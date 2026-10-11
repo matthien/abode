@@ -144,6 +144,7 @@
     border: 1px solid var(--line, rgba(0,0,0,.14)); border-radius: 10px;
     backdrop-filter: blur(6px); font: 600 13px var(--font-ui, system-ui, sans-serif);
   }
+  .ri-toolbar[hidden] { display: none; }
   .ri-group { display: flex; gap: 6px; align-items: center; }
   .ri-sep { width: 1px; align-self: stretch; background: var(--line, rgba(0,0,0,.14)); }
   .ri-toolbar button {
