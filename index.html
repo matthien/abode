@@ -43,6 +43,7 @@
     gap: 10px;
     align-items: center;
   }
+  .controls[hidden] { display: none; }
   .hint { font-size: 12px; color: var(--muted); }
   button {
     font: 600 13px var(--font-ui);
@@ -66,6 +67,8 @@
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/geometries/RoundedBoxGeometry.js"></script>
+<script src="books.js"></script>
 <script src="posters/batman.js"></script>
 <script src="interactive.js"></script>
 <script>
@@ -704,12 +707,13 @@
 
   // ---- Bookshelf: black, against the window wall beside the windows, facing the foot of the bed.
   //      Solid back, two shelves inside plus the top. ----
-  (function bookshelf() {
+  const bookshelf = (function bookshelf() {
     const WID = 32, HT = 47, DEP = 12, TH = 0.75;
     const x0 = 130, x1 = x0 + WID;
     const z0 = 0.7, z1 = z0 + DEP;                 // back against the baseboard, open side faces the bed
     const black = new THREE.MeshStandardMaterial({ color: 0x0c0c0d, roughness: 0.55 });
-    const n = furniture;
+    const n = new THREE.Group();
+    furniture.add(n);
 
     box(x0, 0, z0, x0 + TH, HT, z1, black, n);               // sides
     box(x1 - TH, 0, z0, x1, HT, z1, black, n);
@@ -721,10 +725,61 @@
     // two evenly spaced shelves between the bottom and the top
     const inner0 = 2.5 + TH, inner1 = HT - TH;
     const gap = (inner1 - inner0 - 2 * TH) / 3;
+    const shelfYs = [];
     for (let i = 1; i <= 2; i++) {
       const y = inner0 + i * gap + (i - 1) * TH;
       box(x0 + TH, y, z0 + 0.3, x1 - TH, y + TH, z1, black, n);
+      shelfYs.push(y);
     }
+
+    // Books standing side by side on the upper shelf (second from the top), spines facing out.
+    //  Built by books.js; click one while looking at the shelf to pull it out and turn it over.
+    const books = (function books() {
+      const y = shelfYs[1] + TH, zb = z0 + 2.2;
+      const specs = [
+        { note: 'normal people by sally rooney', title: 'Normal People', author: 'Sally Rooney',
+          cover: 0xe9e4da, accent: 0x7d9bb8, ink: 0x2a2a2a, motif: 'gather', thickness: 1.0, height: 8.3, depth: 5.5 },
+        { note: 'seven husbands of evelyn hugo', title: 'The Seven Husbands of Evelyn Hugo', author: 'Taylor Jenkins Reid',
+          cover: 0x0f6b4f, accent: 0xd8b56a, ink: 0xf3ead2, motif: 'boom', thickness: 1.3, height: 8.3, depth: 5.5 },
+        { note: 'red rising', title: 'Red Rising', author: 'Pierce Brown',
+          cover: 0x151515, accent: 0xb3201b, ink: 0xe9e2d6, motif: 'fracture', thickness: 1.3, height: 8.2, depth: 5.4 },
+        { note: 'tomorrow and tomorrow and tomorrow', title: 'Tomorrow, and Tomorrow, and Tomorrow', author: 'Gabrielle Zevin',
+          cover: 0x1f3d6b, accent: 0xe9d9b8, ink: 0xf1e6cf, motif: 'wave', thickness: 1.5, height: 9.5, depth: 6.4 },
+        { note: 'conversations with friends', title: 'Conversations with Friends', author: 'Sally Rooney',
+          cover: 0xd9a7a0, accent: 0x8a4b45, ink: 0x2b2422, motif: 'network', thickness: 1.1, height: 8.3, depth: 5.5 },
+        { note: 'tuesdays with morrie', title: 'Tuesdays with Morrie', author: 'Mitch Albom',
+          cover: 0xf1ead8, accent: 0x7f9a6a, ink: 0x34507e, motif: 'branches', thickness: 0.8, height: 8.0, depth: 5.3 },
+        { note: 'design of everyday things', title: 'The Design of Everyday Things', author: 'Don Norman',
+          cover: 0xf4f1ea, accent: 0xc8442c, ink: 0x1f1f1f, motif: 'schematic', thickness: 1.1, height: 8.2, depth: 5.5 },
+        { note: 'the guest list', title: 'The Guest List', author: 'Lucy Foley',
+          cover: 0x1d2b3f, accent: 0x6f8fa8, ink: 0xe9e2d0, motif: 'maze', thickness: 1.2, height: 8.0, depth: 5.3 },
+        { note: 'i want to die but i want to eat tteokbokki', title: 'I Want to Die but I Want to Eat Tteokbokki', author: 'Baek Sehee',
+          spineAuthor: 'BAEK', cover: 0xf2c6b4, accent: 0xd0503f, ink: 0x3a2a26, motif: 'continuum', thickness: 0.9, height: 7.5, depth: 5.0 },
+        { note: 'convenience store woman', title: 'Convenience Store Woman', author: 'Sayaka Murata',
+          cover: 0xcfe3dc, accent: 0x4f8a7a, ink: 0x2a3a36, motif: 'efficiency', thickness: 0.6, height: 7.6, depth: 5.1 },
+        { note: 'intermezzo', title: 'Intermezzo', author: 'Sally Rooney',
+          cover: 0xc9a44a, accent: 0x5a4a2a, ink: 0x1f1d1a, motif: 'orbit', thickness: 1.6, height: 9.5, depth: 6.4 }
+      ];
+      const list = [];
+      let x = x0 + TH + 3;
+      for (const spec of specs) {
+        const b = RoomBooks.createBook(THREE, { id: spec.note.replace(/\s+/g, '-'), ...spec });
+        b.position.set(x + spec.thickness / 2, y + spec.height / 2, zb + spec.depth / 2);
+        n.add(b);
+        list.push({ object: b, text: spec.note });
+        x += spec.thickness + 0.04;
+      }
+      return list;
+    })();
+    // Close-up views, bottom to top: each compartment, then the top with room for things on it
+    const span = (ya, yb) => new THREE.Box3(new THREE.Vector3(x0, ya, z0), new THREE.Vector3(x1, yb, z1));
+    const views = [
+      span(inner0 - TH, shelfYs[0] + TH),
+      span(shelfYs[0], shelfYs[1] + TH),
+      span(shelfYs[1], inner1 + TH),
+      span(HT - TH, HT + 12)
+    ];
+    return { group: n, views, books };
   })();
 
   // ---- Floor lamp: black, 65 in tall with an upturned bowl shade,
@@ -1126,17 +1181,323 @@
     box(xw, wy1 - P, z0 + F, xw + 0.06, wy1, z1 - F, inner, g);
     box(xw, wy0, z0 + F, xw + 0.06, wy1, z0 + F + P, inner, g);
     box(xw, wy0, z1 - F - P, xw + 0.06, wy1, z1 - F, inner, g);
-    // marker tray along the bottom
-    box(x1, y0 - 0.4, zc - 7, x1 + 2.2, y0 + 0.2, zc + 7, alu, g);
-    box(x1 + 1.9, y0 - 0.4, zc - 7, x1 + 2.2, y0 + 0.8, zc + 7, alu, g);
+    // Magnetic basket hung from the bottom frame at the right end, holding the markers and eraser
+    const basket = new THREE.Group();
+    g.add(basket);
+    const charcoal = new THREE.MeshStandardMaterial({ color: 0x2b2c2f, roughness: 0.6, metalness: 0.2 });
+    const BX0 = xf + 0.06, BX1 = BX0 + 2.7, BY0 = y0 - 1.5, BY1 = y0 + 1.6, BZ0 = z0 + 1.2, BZ1 = BZ0 + 6.6, WALL = 0.1;
+    box(BX0, BY0, BZ0, BX0 + WALL, BY1, BZ1, charcoal, basket);              // back plate (the magnet side)
+    box(BX0, BY0, BZ0, BX1, BY0 + WALL, BZ1, charcoal, basket);              // floor
+    box(BX1 - WALL, BY0, BZ0, BX1, BY1 - 0.6, BZ1, charcoal, basket);        // low front wall
+    box(BX0, BY0, BZ0, BX1, BY1 - 0.6, BZ0 + WALL, charcoal, basket);        // ends
+    box(BX0, BY0, BZ1 - WALL, BX1, BY1 - 0.6, BZ1, charcoal, basket);
+    const floorY = BY0 + WALL;
+
+    // Dry-erase marker, tip at the local origin and body along +y. The cap sits on the tip in
+    // the basket and gets posted on the back end while the marker is in hand.
+    const barrelMat = new THREE.MeshStandardMaterial({ color: 0xe9e8e4, roughness: 0.45 });
+    const cyl = (r0, r1, ya, yb, mat, parent) => {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, yb - ya, 20), mat);
+      m.position.y = (ya + yb) / 2;
+      m.castShadow = m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+    function marker(color, z) {
+      const ink = new THREE.MeshStandardMaterial({ color, roughness: 0.55 });
+      const m = new THREE.Group();
+      cyl(0.08, 0.2, 0, 0.35, ink, m);                  // felt tip
+      cyl(0.28, 0.32, 0.35, 0.8, barrelMat, m);         // collar
+      cyl(0.36, 0.36, 0.8, 4.6, barrelMat, m);          // barrel
+      cyl(0.365, 0.365, 2.1, 3.3, ink, m);              // color band
+      cyl(0.33, 0.33, 4.6, 4.9, ink, m);                // end plug
+      const cap = new THREE.Group();
+      cyl(0.4, 0.4, -0.15, 1.3, ink, cap);
+      box(0.38, 0.1, -0.12, 0.52, 1.2, 0.12, ink, cap); // clip
+      m.add(cap);
+      m.position.set((BX0 + BX1) / 2 + 0.15, floorY + 0.15, z);
+      basket.add(m);
+      return {
+        object: m, kind: 'marker', color,
+        onTake() { cap.position.y = 4.55; },
+        onReturn() { cap.position.y = 0; }
+      };
+    }
+    // Eraser: felt face at the local origin facing -y, long side along x. It stands on end in the
+    // basket with its felt toward the board.
+    function eraser(z) {
+      const LONG = 3.5, SHORT = 1.5;
+      const e = new THREE.Group();
+      box(-LONG / 2, 0, -SHORT / 2, LONG / 2, 0.25, SHORT / 2, new THREE.MeshStandardMaterial({ color: 0xc9c6bf, roughness: 1 }), e);
+      box(-LONG / 2 + 0.05, 0.25, -SHORT / 2 + 0.05, LONG / 2 - 0.05, 1.15, SHORT / 2 - 0.05, charcoal, e);
+      e.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+        new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, -1)));
+      e.position.set(BX0 + WALL + 0.05, floorY + LONG / 2, z);
+      basket.add(e);
+      return { object: e, kind: 'eraser', feltIn: [LONG, SHORT] };
+    }
+    // left to right as you face the board (+z is the viewer's left): red, black, eraser
+    const tools = [marker('#1d1d1f', BZ0 + 3.5), marker('#c62828', BZ0 + 5.4), eraser(BZ0 + 1.3)];
+
     // The writing face is the surface box's +x face, facing into the room
-    return { surface, width: (z1 - F) - (z0 + F), height: (y1 - F - CORK) - (y0 + F + CORK) };
+    return { surface, basket, tools };
   })();
 
   // ---- Floating shelf on the window wall above the desk (fades with the window wall) ----
-  (function floatingShelf() {
+  const floatingShelf = (function floatingShelf() {
     const mat = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.5 });
-    box(1, 60, 0.7, 37, 61.5, 10.5, mat, walls.window);
+    const mesh = box(1, 60, 0.7, 37, 61.5, 10.5, mat, walls.window);
+    const TOP = 61.5, ZC = 5.6;                    // shelf surface height and depth center
+    const items = new THREE.Group();
+    walls.window.add(items);
+    const shade = (m) => { m.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; }); return m; };
+    const plastic = (color, roughness = 0.35) => new THREE.MeshStandardMaterial({ color, roughness });
+
+    // Owala-style water bottle: white body, gray lid with a carry loop and a flip spout
+    const owala = (function bottle() {
+      const b = new THREE.Group();
+      const white = plastic(0xf4f4f2, 0.3), gray = plastic(0x8e9196, 0.45);
+      const prof = [[0, 0], [1.35, 0], [1.5, 0.15], [1.55, 0.5], [1.55, 7.6], [1.5, 7.9], [1.45, 8.1]];
+      b.add(new THREE.Mesh(new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 40), white));
+      const lid = [[1.47, 8.1], [1.5, 8.3], [1.5, 9.2], [1.35, 9.5], [0.9, 9.65], [0, 9.68]];
+      b.add(new THREE.Mesh(new THREE.LatheGeometry(lid.map(([r, y]) => new THREE.Vector2(r, y)), 40), gray));
+      const loop = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.2, 10, 24, Math.PI), gray);
+      loop.position.set(0, 9.6, -0.35);            // carry loop standing up at the back of the lid
+      b.add(loop);
+      const spout = box(-0.45, 9.3, 0.55, 0.45, 9.95, 1.35, gray, b);  // spout cover at the front
+      spout.rotation.x = -0.12;
+      box(-0.3, 8.6, 1.42, 0.3, 9.05, 1.6, plastic(0x6f7277, 0.5), b); // push button
+      b.position.set(5.5, TOP, ZC);
+      items.add(shade(b));
+      return b;
+    })();
+
+    // Black wire-mesh pen cup with a few pens and pencils
+    (function penCup() {
+      const c = new THREE.Group();
+      const R = 1.6, HT = 3.9;
+      const meshTex = canvasTexture(128, (g, s) => {
+        g.clearRect(0, 0, s, s);
+        g.strokeStyle = '#1b1b1d'; g.lineWidth = 3;
+        for (let i = -s; i <= 2 * s; i += 16) {
+          g.beginPath(); g.moveTo(i, 0); g.lineTo(i + s, s); g.stroke();
+          g.beginPath(); g.moveTo(i, s); g.lineTo(i + s, 0); g.stroke();
+        }
+      });
+      meshTex.repeat.set(5, 2);
+      const wire = new THREE.MeshStandardMaterial({ map: meshTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.3 });
+      const black = new THREE.MeshStandardMaterial({ color: 0x1b1b1d, roughness: 0.45, metalness: 0.3 });
+      const wall = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.92, HT, 40, 1, true), wire);
+      wall.position.y = HT / 2;
+      c.add(wall);
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.92, R * 0.92, 0.12, 40), black);
+      base.position.y = 0.06;
+      c.add(base);
+      for (const [y, r] of [[HT, R], [0.12, R * 0.92]]) {      // rolled rims top and bottom
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(r, 0.07, 8, 40), black);
+        rim.rotation.x = Math.PI / 2; rim.position.y = y;
+        c.add(rim);
+      }
+      // [body color, tip color, length, hexagonal pencil?, lean x, lean z, offset x, offset z]
+      const pens = [
+        [0xf2c230, 0xe8b07a, 7.0, true, -0.12, 0.08, -0.6, -0.3],   // yellow pencil
+        [0x1f4fbf, 0x1f4fbf, 5.8, false, 0.14, 0.05, 0.5, -0.4],    // blue pen
+        [0x1d1d1f, 0x1d1d1f, 5.8, false, 0.05, -0.16, 0.1, 0.5],    // black pen
+        [0xc62828, 0xc62828, 5.6, false, -0.2, -0.1, -0.5, 0.4],    // red pen
+        [0xf2c230, 0xe8b07a, 6.4, true, 0.2, 0.15, 0.7, 0.3]        // another pencil
+      ];
+      for (const [body, tip, len, hex, lx, lz, ox, oz] of pens) {
+        const p = new THREE.Group();
+        const rad = hex ? 0.15 : 0.17;
+        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad, len, hex ? 6 : 16), plastic(body, 0.5));
+        shaft.position.y = len / 2;
+        p.add(shaft);
+        // writing end points up out of the cup: sharpened pencil cone, or a pen cap with a clip
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(rad, hex ? 0.6 : 0.35, hex ? 6 : 16), plastic(tip, 0.6));
+        cone.position.y = len + (hex ? 0.3 : 0.17);
+        p.add(cone);
+        if (hex) {
+          const lead = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.16, 8), plastic(0x2b2b2b, 0.6));
+          lead.position.y = len + 0.52;
+          p.add(lead);
+        } else {
+          box(rad - 0.02, len - 1.6, -0.05, rad + 0.08, len - 0.1, 0.05, plastic(0xbfc1c4, 0.3), p);
+        }
+        p.position.set(ox, 0.15, oz);
+        p.rotation.set(lx, 0, lz);
+        c.add(p);
+      }
+      c.position.set(13, TOP, ZC);
+      items.add(shade(c));
+    })();
+
+    // LEGO airplane: white fuselage on landing gear, red wings and tail, blue windows, studs on top
+    const plane = (function legoPlane() {
+      const p = new THREE.Group();
+      const white = plastic(0xf2f3f2, 0.3), red = plastic(0xc91a09, 0.3), blue = plastic(0x1e5aa8, 0.25);
+      const glass = plastic(0x22313f, 0.15), gray = plastic(0xa0a5a9, 0.35), black = plastic(0x1b1b1b, 0.5);
+      const P = 0.315;                              // LEGO stud pitch, in inches
+      // studs as one instanced mesh per color, on top of a plate spanning [x0,x1] x [z0,z1] at height y
+      function studs(x0, x1, z0, z1, y, mat) {
+        const nx = Math.round((x1 - x0) / P), nz = Math.round((z1 - z0) / P);
+        const geo = new THREE.CylinderGeometry(0.095, 0.095, 0.07, 12);
+        const im = new THREE.InstancedMesh(geo, mat, nx * nz);
+        const m = new THREE.Matrix4();
+        let k = 0;
+        for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+          m.makeTranslation(x0 + (i + 0.5) * P, y + 0.035, z0 + (j + 0.5) * P);
+          im.setMatrixAt(k++, m);
+        }
+        p.add(im);
+      }
+      const G = 0.9;                                // fuselage underside above the shelf
+      // fuselage, nose pointing +x, stepped down toward the nose and the tail like stacked bricks
+      box(-4.4, G, -1.0, 3.8, G + 2.2, 1.0, white, p);
+      box(3.8, G + 0.3, -0.85, 4.8, G + 1.9, 0.85, white, p);
+      box(4.8, G + 0.6, -0.6, 5.4, G + 1.6, 0.6, red, p);
+      box(-6.2, G + 0.9, -0.7, -4.4, G + 2.2, 0.7, white, p);
+      box(-4.4, G + 0.5, -1.02, 3.8, G + 0.8, 1.02, blue, p);     // blue stripe along both sides
+      studs(-4.4, 2.2, -0.95, 0.95, G + 2.2, white);
+      // cockpit glass and a row of cabin windows on both sides
+      box(2.4, G + 1.4, -0.9, 3.8, G + 2.25, 0.9, glass, p);
+      for (let x = -3.6; x < 1.8; x += 0.95) {
+        box(x, G + 1.25, -1.03, x + 0.5, G + 1.75, 1.03, glass, p);
+      }
+      // propeller
+      const hub = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.6, 16), gray);
+      hub.rotation.z = -Math.PI / 2; hub.position.set(5.7, G + 1.1, 0);
+      p.add(hub);
+      const blade = box(5.55, G - 0.4, -0.18, 5.65, G + 2.6, 0.18, gray, p);
+      blade.rotation.x = 0.35;
+      // wings: red plates through the lower fuselage, studs on top
+      box(-0.6, G + 0.5, -4.2, 1.9, G + 0.75, 4.2, red, p);
+      studs(-0.6, 1.9, -4.2, -1.0, G + 0.75, red);
+      studs(-0.6, 1.9, 1.0, 4.2, G + 0.75, red);
+      box(0.0, G + 0.75, -4.2, 1.3, G + 1.0, -3.6, blue, p);       // wingtip accents
+      box(0.0, G + 0.75, 3.6, 1.3, G + 1.0, 4.2, blue, p);
+      // tail: horizontal stabilizer and fin
+      box(-6.2, G + 1.9, -1.9, -4.9, G + 2.15, 1.9, red, p);
+      studs(-6.2, -4.9, -1.9, -0.7, G + 2.15, red);
+      studs(-6.2, -4.9, 0.7, 1.9, G + 2.15, red);
+      box(-6.2, G + 2.2, -0.16, -4.6, G + 4.1, 0.16, red, p);
+      box(-6.2, G + 3.6, -0.17, -5.4, G + 4.1, 0.17, blue, p);
+      // landing gear: two wheels under the wings, one under the nose
+      const wheel = (x, z) => {
+        const w = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.3, 20), black);
+        w.rotation.x = Math.PI / 2; w.position.set(x, 0.4, z);
+        p.add(w);
+        box(x - 0.12, 0.4, z - 0.08, x + 0.12, G + 0.5, z + 0.08, gray, p);
+      };
+      wheel(0.6, -1.6); wheel(0.6, 1.6); wheel(4.2, 0);
+      // Nose (+x) aimed at the room's entrance, the corridor opening; scaled to fit the shelf's depth
+      const PX = 32.5, door = new THREE.Vector2(CORR_W / 2 - PX, D - ZC);
+      p.rotation.y = Math.atan2(-door.y, door.x);
+      p.scale.setScalar(0.7);
+      p.position.set(PX, TOP, ZC + 0.2);
+      items.add(shade(p));
+      return p;
+    })();
+
+    // Cologne stand: a two-step clear acrylic riser. Back step: Bleu de Chanel and Versace Pour Homme.
+    // Front step: Black Paw Bamboo and Jasmine Tea. Returns the bottles' hover notes.
+    const cologneNotes = (function cologneStand() {
+      const s = new THREE.Group();
+      const acrylic = new THREE.MeshStandardMaterial({ color: 0xeaf4f6, roughness: 0.05, transparent: true, opacity: 0.28, depthWrite: false });
+      const W2 = 4.6, BACK = 3.0, FRONT = 0.8;     // half width; step heights
+      const steps = [
+        box(-W2, 0, -2.3, W2, BACK, 0, acrylic, s),   // back step
+        box(-W2, 0, 0, W2, FRONT, 2.3, acrylic, s)    // front step
+      ];
+      const glassMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.05, transparent: true, opacity: 0.3, depthWrite: false });
+      const liquid = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.2, transparent: true, opacity: 0.85 });
+      const metal = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.25, metalness: 0.35 });
+      const solid = (color, roughness = 0.3) => new THREE.MeshStandardMaterial({ color, roughness });
+      // Flat label on a bottle's front face, drawn on a canvas (w x h inches, 128 px per inch)
+      function label(g, w, h, y, z, draw) {
+        const c = document.createElement('canvas');
+        c.width = Math.round(w * 128); c.height = Math.round(h * 128);
+        draw(c.getContext('2d'), c.width, c.height);
+        const tex = new THREE.CanvasTexture(c);
+        tex.encoding = THREE.sRGBEncoding;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.3 }));
+        m.position.set(0, y, z + 0.01);
+        g.add(m);
+        return m;
+      }
+      const setFont = (g2, px, color) => {
+        g2.fillStyle = color; g2.textAlign = 'center'; g2.textBaseline = 'middle';
+        g2.font = `600 ${px}px "Figtree", system-ui, sans-serif`;
+      };
+
+      // Bleu de Chanel: deep navy glass, chunky rectangle, black block cap, silver lettering
+      const chanel = new THREE.Group();
+      box(-1.2, 0, -0.65, 1.2, 3.5, 0.65, solid(0x0b1630, 0.06), chanel);
+      box(-1.1, 3.5, -0.58, 1.1, 4.45, 0.58, solid(0x111113, 0.15), chanel);
+      label(chanel, 2.0, 0.9, 2.55, 0.65, (g2, w, h) => {
+        setFont(g2, 30, '#c9ccd1');
+        g2.fillText('BLEU', w / 2, h * 0.22);
+        g2.fillText('DE', w / 2, h * 0.5);
+        g2.fillText('CHANEL', w / 2, h * 0.78);
+      });
+      chanel.position.set(-2.6, BACK, -1.15);
+
+      // Versace Pour Homme: clear rectangular glass, pale blue juice, silver cap, silver Medusa medallion
+      const versace = new THREE.Group();
+      box(-0.88, 0.2, -0.45, 0.88, 3.3, 0.45, liquid(0x5f9fd0), versace);
+      box(-1.0, 0, -0.57, 1.0, 3.9, 0.57, glassMat, versace);
+      box(-0.25, 3.9, -0.25, 0.25, 4.1, 0.25, metal(0xb9b9b4), versace);   // neck collar
+      box(-0.65, 4.1, -0.5, 0.65, 4.95, 0.5, metal(0xc9cbce), versace);
+      const medal = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.05, 32), metal(0xd5d7da));
+      medal.rotation.x = Math.PI / 2; medal.position.set(0, 2.5, 0.6);
+      versace.add(medal);
+      versace.position.set(2.6, BACK, -1.15);
+
+      // Black Paw (Bamboo, Jasmine Tea): frosted square glass, black cap, black paw-print label
+      function blackPaw(juice, name) {
+        const g = new THREE.Group();
+        box(-0.72, 0.15, -0.72, 0.72, 2.2, 0.72, liquid(juice), g);
+        box(-0.85, 0, -0.85, 0.85, 2.6, 0.85,
+          new THREE.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 0.6, transparent: true, opacity: 0.55, depthWrite: false }), g);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.85, 32), solid(0x141416, 0.35));
+        cap.position.y = 2.6 + 0.425;
+        g.add(cap);
+        label(g, 1.2, 1.2, 1.3, 0.85, (g2, w, h) => {
+          g2.fillStyle = '#141416'; g2.fillRect(0, 0, w, h);
+          g2.fillStyle = '#f4f4f2';
+          const pad = (x, y, rx, ry) => { g2.beginPath(); g2.ellipse(x * w, y * h, rx * w, ry * h, 0, 0, Math.PI * 2); g2.fill(); };
+          pad(0.5, 0.45, 0.16, 0.13);                                   // paw print
+          pad(0.3, 0.27, 0.06, 0.08); pad(0.43, 0.2, 0.06, 0.08); pad(0.57, 0.2, 0.06, 0.08); pad(0.7, 0.27, 0.06, 0.08);
+          setFont(g2, 15, '#f4f4f2');
+          g2.fillText(name, w / 2, h * 0.8);
+        });
+        return g;
+      }
+      const bamboo = blackPaw(0xc3d68a, 'BAMBOO');
+      bamboo.position.set(-0.9, FRONT, 1.15);
+      const jasmine = blackPaw(0xe6c97a, 'JASMINE TEA');
+      jasmine.position.set(0.9, FRONT, 1.15);
+
+      s.add(chanel, versace, bamboo, jasmine);
+      s.position.set(23, TOP, ZC);
+      items.add(shade(s));
+      for (const m of steps) m.castShadow = false;   // clear acrylic shouldn't throw a solid shadow
+      return [
+        { object: chanel, text: 'bleu de chanel edt' },
+        { object: versace, text: 'versace pour homme' },
+        { object: bamboo, text: 'black paw bamboo' },
+        { object: jasmine, text: 'black paw jasmine tea' }
+      ];
+    })();
+
+    // close-up frames the shelf plus room above it for whatever sits there
+    // captions shown when you hover (or tap) a thing in the shelf's close-up
+    const notes = [
+      { object: owala, text: 'my 6th water bottle...' },
+      { object: plane, text: 'my brother gave me this in 2020' },
+      ...cologneNotes
+    ];
+    return { mesh, items, notes, view: new THREE.Box3(new THREE.Vector3(1, 59, 0.7), new THREE.Vector3(37, 73, 10.5)) };
   })();
 
   // ---- Office chair: gray mesh seat and back on a white frame, facing the desk ----
@@ -1286,7 +1647,8 @@
   updateWallFades(0, true);
 
   // ---------------------------------------------------------------------------
-  // Interactive objects (interactive.js): click the whiteboard to focus and draw on it
+  // Interactive objects (interactive.js): click the whiteboard to focus, then draw with the
+  // markers and eraser from its basket. The shelves zoom in; the bookshelf steps shelf by shelf.
   // ---------------------------------------------------------------------------
   const roomControls = document.querySelector('.controls');
   const focus = RoomInteractive.createFocusController({
@@ -1296,8 +1658,19 @@
   RoomInteractive.createDrawableBoard({
     THREE, controller: focus, renderer,
     mesh: whiteboard.surface,
-    widthIn: whiteboard.width, heightIn: whiteboard.height,
+    basket: whiteboard.basket, tools: whiteboard.tools,
     normal: new THREE.Vector3(1, 0, 0)
+  });
+  RoomInteractive.createFocusSpot({
+    THREE, controller: focus, renderer,
+    objects: [bookshelf.group], views: bookshelf.views, notes: bookshelf.books,
+    inspect: { objects: bookshelf.books.map((b) => b.object), face: new THREE.Vector3(1, 0, 0) },
+    normal: new THREE.Vector3(0, 0, 1)
+  });
+  RoomInteractive.createFocusSpot({
+    THREE, controller: focus, renderer,
+    objects: [floatingShelf.mesh, floatingShelf.items], views: [floatingShelf.view], notes: floatingShelf.notes,
+    normal: new THREE.Vector3(0, 0, 1)
   });
 
   // ---------------------------------------------------------------------------
